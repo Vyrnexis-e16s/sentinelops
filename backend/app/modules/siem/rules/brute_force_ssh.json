@@ -1,0 +1,14 @@
+{
+  "name": "Brute-force SSH authentication",
+  "description": "Multiple failed SSH logins from the same source IP in a short window.",
+  "query_dsl": {
+    "all_of": [
+      {"field": "source", "op": "eq", "value": "sshd"},
+      {"field": "parsed.event_type", "op": "eq", "value": "auth_failure"},
+      {"field": "parsed.failed_count", "op": "gte", "value": 5}
+    ],
+    "score": 7.5,
+    "severity": "high"
+  },
+  "attack_technique_ids": ["T1110", "T1078"]
+}

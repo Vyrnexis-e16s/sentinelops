@@ -1,0 +1,18 @@
+{
+  "name": "Suspicious PowerShell execution",
+  "description": "PowerShell invocations with encoded commands or known downgrade flags.",
+  "query_dsl": {
+    "all_of": [
+      {"field": "source", "op": "eq", "value": "windows_security"},
+      {"field": "parsed.process_name", "op": "regex", "value": "(?i)powershell(_ise)?\\.exe"}
+    ],
+    "any_of": [
+      {"field": "parsed.command_line", "op": "regex", "value": "(?i)-e(nc|ncodedcommand)\\b"},
+      {"field": "parsed.command_line", "op": "regex", "value": "(?i)-nop\\b|-noprofile\\b"},
+      {"field": "parsed.command_line", "op": "contains", "value": "FromBase64String"}
+    ],
+    "score": 6.0,
+    "severity": "medium"
+  },
+  "attack_technique_ids": ["T1059", "T1105"]
+}

@@ -1,0 +1,15 @@
+{
+  "name": "Web shell upload",
+  "description": "Write of a server-side script (php/aspx/jsp) into a web-accessible directory.",
+  "query_dsl": {
+    "all_of": [
+      {"field": "source", "op": "eq", "value": "filesystem"},
+      {"field": "parsed.operation", "op": "eq", "value": "write"},
+      {"field": "parsed.path", "op": "regex",
+       "value": "(?i)/(www|htdocs|webroot|public_html|wwwroot)/.+\\.(php|aspx?|jspx?|cfm)$"}
+    ],
+    "score": 8.5,
+    "severity": "critical"
+  },
+  "attack_technique_ids": ["T1505", "T1190"]
+}

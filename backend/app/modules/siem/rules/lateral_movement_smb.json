@@ -1,0 +1,14 @@
+{
+  "name": "Lateral movement via SMB/admin shares",
+  "description": "Access to administrative share (ADMIN$, C$, IPC$) from an unusual source host.",
+  "query_dsl": {
+    "all_of": [
+      {"field": "source", "op": "eq", "value": "windows_security"},
+      {"field": "parsed.event_id", "op": "in", "value": [5140, 5145]},
+      {"field": "parsed.share_name", "op": "regex", "value": "^(ADMIN\\$|C\\$|IPC\\$)$"}
+    ],
+    "score": 7.0,
+    "severity": "high"
+  },
+  "attack_technique_ids": ["T1021", "T1210"]
+}

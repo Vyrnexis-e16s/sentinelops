@@ -1,0 +1,14 @@
+{
+  "name": "DNS tunneling candidate",
+  "description": "Long subdomain with high entropy indicates data-exfil via DNS.",
+  "query_dsl": {
+    "all_of": [
+      {"field": "source", "op": "eq", "value": "dns"},
+      {"field": "parsed.query_length", "op": "gte", "value": 60},
+      {"field": "parsed.entropy", "op": "gte", "value": 3.5}
+    ],
+    "score": 6.5,
+    "severity": "high"
+  },
+  "attack_technique_ids": ["T1071", "T1041", "T1572"]
+}
