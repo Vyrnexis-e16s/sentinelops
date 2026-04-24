@@ -93,7 +93,7 @@ export type Inference = {
   timestamp: string;
   prediction: string;
   probability: number;
-  label: "benign" | "attack";
+  label: string;
   attack_class: string | null;
 };
 
@@ -104,3 +104,72 @@ export type VaultObject = {
   mime_type: string;
   created_at: string;
 };
+
+export type VaultAuditEntry = {
+  id: string;
+  timestamp: string;
+  actor_id: string | null;
+  action: string;
+  resource_type: string;
+  resource_id: string | null;
+  metadata: Record<string, unknown>;
+  entry_hash: string;
+};
+
+export type IdsModelInfo = {
+  trained_at: string | null;
+  accuracy: number | null;
+  feature_count: number;
+  feature_list: string[];
+  classes: string[];
+  artifact_present: boolean;
+  artifact_path: string;
+  notes: string | null;
+};
+
+export type IdsInferenceResult = Inference & {
+  explanation?: Record<string, unknown> | null;
+};
+
+/** Multipart upload (does not set Content-Type so the browser can set the boundary). */
+export async function vaultUpload(file: File): Promise<VaultObject> {
+  const token = getAccessToken();
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await fetch("/api/v1/vault/files", {
+    method: "POST",
+    body: fd,
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    credentials: "include"
+  });
+  if (!res.ok) {
+    let detail: string;
+    try {
+      const body = (await res.json()) as { detail?: string };
+      detail = body?.detail || res.statusText;
+    } catch {
+      detail = res.statusText;
+    }
+    throw { status: res.status, detail } satisfies ApiError;
+  }
+  return (await res.json()) as VaultObject;
+}
+
+export async function vaultDownloadBlob(objectId: string): Promise<Blob> {
+  const token = getAccessToken();
+  const res = await fetch(`/api/v1/vault/files/${objectId}/download`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    credentials: "include"
+  });
+  if (!res.ok) {
+    let detail: string;
+    try {
+      const body = (await res.json()) as { detail?: string };
+      detail = body?.detail || res.statusText;
+    } catch {
+      detail = res.statusText;
+    }
+    throw { status: res.status, detail } satisfies ApiError;
+  }
+  return res.blob();
+}

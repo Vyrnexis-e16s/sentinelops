@@ -69,29 +69,18 @@ Use the scripts in [`scripts/`](scripts/) to create Python **venv**s (`backend/.
 
 ## Portfolio proof (screenshots)
 
-Add PNGs under [`docs/screenshots/`](docs/screenshots/) and reference them here. Suggested shots — capture **after** `make up` and `make seed`, signed in (or with a dev JWT) so the API-backed panels are populated.
-
-| # | Suggested filename | **Exactly where to capture (URL + what to show)** |
-|---|-------------------|-----------------------------------------------|
-| 1 | `01-dashboard.png` | `http://localhost:3000/dashboard` — full page: stat cards, globe, **Recent alerts** (REST and/or live WS if a JWT is in `localStorage` key `sentinelops_access_token`), module tiles. |
-| 2 | `02-siem.png` | `http://localhost:3000/siem` — table of alerts and rules list (or disconnect banner + fallback if unauthenticated). |
-| 3 | `03-recon.png` | `http://localhost:3000/recon` — target list and job state after a scan. |
-| 4 | `04-ids.png` | `http://localhost:3000/ids` — inference / feature strip. |
-| 5 | `05-vault.png` | `http://localhost:3000/vault` — encrypted object list. |
-| 6 | `06-api-docs.png` | `http://localhost:8000/docs` — Swagger with SIEM, Sigma, STIX, IDS drift endpoints visible. |
-| 7 | `07-metrics.png` | `http://localhost:8000/metrics` — Prometheus text export (if `EXPOSE_PROMETHEUS=true`). |
-| 8 | `08-command-palette.png` | `http://localhost:3000/dashboard` with **⌘K / Ctrl+K** — command palette open. |
-| 9 | `09-themes.png` | Any page with the theme control used to show **Tactical** vs **Quantum Aurora**. |
+Screenshots are stored as PNGs in [`docs/images/`](docs/images/). For best results, capture **after** `make up` and `make seed`, while signed in (or with a dev JWT) so the API-backed panels are populated. Optional extras you can add the same way: `05-vault.png` (`/vault`), `06-api-docs.png` (`http://localhost:8000/docs`), `07-metrics.png` (`/metrics` with `EXPOSE_PROMETHEUS=true`), `08-command-palette.png` (⌘K / Ctrl+K on any page), `09-themes.png` (Tactical vs Quantum Aurora).
 
 **How to get a JWT for real UI data:** use **Authorize** in Swagger on `http://localhost:8000/docs` after registering a passkey, or run WebAuthn from the app and copy the token into `localStorage` as `sentinelops_access_token` (or set `NEXT_PUBLIC_DEV_TOKEN` in `.env.local` for local only).
 
-Placeholder image slots (replace with your files):
+### Current captures
 
-![Dashboard](docs/screenshots/01-dashboard.png)
-
-![SIEM](docs/screenshots/02-siem.png)
-
-![API docs](docs/screenshots/06-api-docs.png)
+| View | Screenshot |
+|------|------------|
+| Dashboard | ![Dashboard](docs/images/01-dashboard.png) |
+| SIEM | ![SIEM](docs/images/02-siem.png) |
+| Recon | ![Recon](docs/images/03-recon.png) |
+| IDS | ![IDS](docs/images/04-ids.png) |
 
 ## Developing without Docker
 
