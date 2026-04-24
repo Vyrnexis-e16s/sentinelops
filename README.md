@@ -156,6 +156,25 @@ If any of the above is unclear, stop and get advice before running the tool — 
 
 If you find a vulnerability, please see [SECURITY.md](SECURITY.md) for disclosure. Don't open a public issue.
 
+### Dependency audits (frontend / npm)
+
+From the repo root, check and apply **Node** dependency fixes (visible in CI and local `npm install` output):
+
+```bash
+cd frontend
+npm audit                 # list known issues in the dependency tree
+npm audit fix             # apply non-breaking semver-safe updates first (preferred)
+```
+
+`npm audit fix --force` may pull **major** upgrades and **can break** the Next.js app or eslint config — only use it in a branch, then run `npm run typecheck`, `npm run lint`, and `npm run build` before merging.
+
+Optional (Python backend, same machine):
+
+```bash
+cd backend && . .venv/bin/activate  # or your venv
+pip install pip-audit && pip-audit -r requirements.txt
+```
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE). The Apache 2.0 license grants you broad rights (commercial use, modification, distribution, sublicensing) in exchange for retaining attribution and the license notice, and it includes a patent grant that MIT does not. It also ships with an explicit **Disclaimer of Warranty** and **Limitation of Liability** — how you use this project is entirely your responsibility (see the section above).
