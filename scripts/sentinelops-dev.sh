@@ -36,6 +36,34 @@ docker_compose() {
   )
 }
 
+# True when every service in the compose file has a running container
+compose_all_running() {
+  (cd "$REPO_ROOT" || return 1
+  local f="infra/docker/docker-compose.yml" exp r
+  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    exp=$(docker compose -f "$f" config --services 2>/dev/null | awk 'NF' | wc -l | tr -d ' \t')
+    r=$(docker compose -f "$f" ps -q --status running 2>/dev/null | awk 'NF' | wc -l | tr -d ' \t')
+    [[ -n "$exp" && "$exp" -ge 1 && -n "$r" && "$r" = "$exp" ]]
+  elif command -v docker-compose >/dev/null 2>&1; then
+    exp=$(docker-compose -f "$f" config --services 2>/dev/null | awk 'NF' | wc -l | tr -d ' \t')
+    r=$(docker-compose -f "$f" ps 2>/dev/null | grep -cE '[[:space:]]Up([[:space:]]|\()' 2>/dev/null || true)
+    r=${r:-0}
+    [[ -n "$exp" && "$exp" -ge 1 && -n "$r" && "$r" -ge "$exp" ]]
+  else
+    return 1
+  fi
+  )
+}
+
+run_compose_or_skip() {
+  if compose_all_running; then
+    log "Docker / Docker Compose: stack is already up (all services running). Skipping: docker compose up -d --build"
+    return 0
+  fi
+  log "docker compose up -d --build (starting or rebuilding stack)"
+  docker_compose up -d --build
+}
+
 if [[ "$MODE" == "docker" ]]; then
   if ! command -v docker >/dev/null 2>&1; then
     logerr "Install Docker: https://docs.docker.com/engine/install/"
@@ -45,7 +73,7 @@ if [[ "$MODE" == "docker" ]]; then
     logerr "Docker engine is not running. Start the Docker service, then retry."
     exit 1
   fi
-  docker_compose up -d --build 2>&1 | tee -a "$LOG_FILE"
+  run_compose_or_skip 2>&1 | tee -a "$LOG_FILE"
   dce="${PIPESTATUS[0]}"
   if [[ "$dce" -ne 0 ]]; then
     logerr "docker compose failed (exit $dce). See: $LOG_FILE"
@@ -159,8 +187,7 @@ if [[ "$MODE" == "full" ]]; then
     logerr "Docker engine is not running. Start the Docker service, then retry. Or: MODE=local"
     exit 1
   fi
-  log "docker compose up -d --build (full stack)"
-  docker_compose up -d --build 2>&1 | tee -a "$LOG_FILE"
+  run_compose_or_skip 2>&1 | tee -a "$LOG_FILE"
   dce="${PIPESTATUS[0]}"
   if [[ "$dce" -ne 0 ]]; then
     logerr "docker compose failed (exit $dce). See: $LOG_FILE"

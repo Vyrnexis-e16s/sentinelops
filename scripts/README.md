@@ -14,7 +14,7 @@ Two entry points (pick your OS):
 3. Create **`backend/.venv`** and **`ml/.venv`**, `pip install -U pip`, install each `requirements.txt`.
 4. Require **Node.js 18+**, then install frontend deps (**pnpm** if installed, else **npm**).
 5. Run **`pnpm run typecheck`** (or `npm run typecheck`) and **`lint`**.
-6. In **full** mode (default): require a running Docker engine, then run **`docker compose up -d --build`** (or `docker-compose`) for `infra/docker/docker-compose.yml` — the database, cache, and containerized app stack are expected to come up this way.
+6. In **full** mode (default): require a running Docker engine, then ensure the compose stack is up. If **`docker compose ps`** shows every service **running**, the scripts **skip** `up -d --build` and log that Docker is already up; otherwise they run **`docker compose up -d --build`** (or `docker-compose`).
 
 Logs are written under **`logs/sentinelops-dev-*.log`**.
 

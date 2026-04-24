@@ -98,6 +98,53 @@ function Test-DockerEngine {
   return ($LASTEXITCODE -eq 0)
 }
 
+# True if every service in the compose file has a running container (docker compose v2), or v1 heuristics
+function Test-SentinelopsComposeAllRunning {
+  if (-not (Test-DockerEngine)) { return $false }
+  Push-Location $RepoRoot
+  try {
+    if (HasCmd "docker") {
+      $null = & docker compose version 2>&1
+      if ($LASTEXITCODE -eq 0) {
+        $raw = & docker compose -f $ComposeFile config --services 2>&1
+        if ($LASTEXITCODE -ne 0) { return $false }
+        $nExp = @($raw -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_ }).Count
+        if ($nExp -lt 1) { return $false }
+        $runOut = & docker compose -f $ComposeFile ps -q --status running 2>&1
+        if ($LASTEXITCODE -ne 0) { return $false }
+        $nRun = @($runOut -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_ }).Count
+        return ($nRun -ge $nExp)
+      }
+    }
+    if (HasCmd "docker-compose") {
+      $raw = & docker-compose -f $ComposeFile config --services 2>&1
+      if ($LASTEXITCODE -ne 0) { return $false }
+      $nExp = @($raw -split '\r?\n' | ForEach-Object { $_.Trim() } | Where-Object { $_ }).Count
+      if ($nExp -lt 1) { return $false }
+      $t = & docker-compose -f $ComposeFile ps 2>&1
+      if ($LASTEXITCODE -ne 0) { return $false }
+      $nUp = 0
+      foreach ($line in ($t -split '\r?\n')) {
+        if ($line -match '^\s*NAME\s' -or $line -match '^\s*-\s*-\s*-') { continue }
+        if ($line -match '\s+Up(\s+|\(|\Z)') { $nUp++ }
+      }
+      return ($nUp -ge $nExp)
+    }
+  } finally {
+    Pop-Location
+  }
+  return $false
+}
+
+function Start-SentinelopsCompose {
+  if (Test-SentinelopsComposeAllRunning) {
+    Log "Docker / Docker Compose: stack for $ComposeFile is already up (all services running). Skipping: docker compose up -d --build"
+    return 0
+  }
+  Log "docker compose up -d --build (starting or rebuilding stack)"
+  return (Invoke-DockerCompose @("up", "-d", "--build"))
+}
+
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
 Log "PowerShell $psv ($shellKind) | Mode=$Mode | Repo=$RepoRoot | Log=$LogFile"
 
@@ -116,7 +163,7 @@ if ($Mode -eq "docker") {
     Log "  https://docs.docker.com/desktop/install/windows-install/" "ERROR"
     exit 1
   }
-  $code = Invoke-DockerCompose @("up", "-d", "--build")
+  $code = (Start-SentinelopsCompose)
   if ($code -ne 0) { Log "docker compose failed (exit $code). See: $LogFile" "ERROR"; exit 1 }
   Log "http://localhost:3000  |  http://localhost:8000/docs"
   exit 0
@@ -236,8 +283,7 @@ if ($Mode -eq "full") {
     Log "  https://docs.docker.com/desktop/install/windows-install/" "ERROR"
     exit 1
   }
-  Log "docker compose up -d --build (required for full application stack)"
-  $dc = Invoke-DockerCompose @("up", "-d", "--build")
+  $dc = (Start-SentinelopsCompose)
   if ($dc -ne 0) {
     Log "docker compose failed (exit $dc). See log: $LogFile" "ERROR"
     exit 1
