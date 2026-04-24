@@ -1,0 +1,29 @@
+# Host install / build output must not be copied over deps stage node_modules (breaks COPY . .).
+node_modules
+.next
+out
+dist
+build
+
+.git
+.gitignore
+
+# Env and local-only
+.env
+.env.*
+!.env.example
+
+# Tests / tooling artifacts
+coverage
+playwright-report
+test-results
+*.tsbuildinfo
+
+# Logs
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+.DS_Store
+Thumbs.db
