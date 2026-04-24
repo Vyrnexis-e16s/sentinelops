@@ -36,20 +36,24 @@ export default function SiemPage() {
   const [status, setStatus] = useState<"all" | Alert["status"]>("all");
 
   const load = useCallback(async () => {
+    const errors: string[] = [];
     try {
-      const [a, r] = await Promise.all([
-        api.get<Paginated<Alert>>("/api/v1/siem/alerts?size=50"),
-        api.get<Rule[]>("/api/v1/siem/rules")
-      ]);
+      const a = await api.get<Paginated<Alert>>("/api/v1/siem/alerts?size=50");
       setAlerts(a.items);
-      setRules(r);
-      setErr(null);
     } catch (e: unknown) {
       const a = e as ApiError;
-      setErr(a.detail || "Not connected. Sign in and ensure the API is running.");
+      errors.push(`alerts: ${a.detail || "API request failed"}`);
       setAlerts([]);
+    }
+    try {
+      const r = await api.get<Rule[]>("/api/v1/siem/rules");
+      setRules(r);
+    } catch (e: unknown) {
+      const a = e as ApiError;
+      errors.push(`rules: ${a.detail || "API request failed"}`);
       setRules([]);
     }
+    setErr(errors.length ? errors.join(" | ") : null);
   }, []);
 
   useEffect(() => {

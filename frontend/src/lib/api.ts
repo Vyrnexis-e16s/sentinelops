@@ -26,7 +26,14 @@ async function request<T>(
     let detail: string;
     try {
       const body = await res.json();
-      detail = body?.detail || res.statusText;
+      detail =
+        typeof body?.detail === "string"
+          ? body.detail
+          : typeof body?.message === "string"
+            ? body.message
+            : body?.detail
+              ? JSON.stringify(body.detail)
+              : res.statusText;
     } catch {
       detail = res.statusText;
     }

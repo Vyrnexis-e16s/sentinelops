@@ -1,5 +1,3 @@
-version: "3.9"
-
 # SentinelOps local stack. Run from repo root: `make up`.
 
 services:
@@ -51,7 +49,12 @@ services:
       - vault_data:/var/lib/sentinelops/vault
     ports:
       - "8000:8000"
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    command:
+      [
+        "sh",
+        "-c",
+        "alembic upgrade head || (python -c 'import asyncio; from app.core.db import init_db; asyncio.run(init_db())' && alembic stamp head); uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+      ]
 
   worker:
     build:
@@ -67,7 +70,7 @@ services:
     volumes:
       - ../../backend:/app
       - ../../ml/artifacts:/app/ml/artifacts:ro
-    command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info", "--concurrency=4"]
+    command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info", "--concurrency=4", "-Q", "recon,siem,ids,celery"]
 
   frontend:
     build:

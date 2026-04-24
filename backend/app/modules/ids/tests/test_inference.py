@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from app.modules.ids.services import inference
+from app.modules.ids.services import flow, inference
 
 
 class FakeModel:
@@ -35,7 +35,7 @@ def _patch_loader():
         "classes": ["normal", "neptune"],
         "trained_at": None,
         "accuracy": 0.99,
-        "notes": "fake",
+        "notes": "test fixture",
     }
     with patch.object(inference, "_load_model", return_value=bundle), patch.object(
         inference, "is_available", return_value=True
@@ -62,3 +62,20 @@ def test_predict_bulk_count() -> None:
     rows = [{"duration": v} for v in (0.1, 0.9, 0.2)]
     out = inference.predict_bulk(rows)
     assert len(out) == 3
+
+
+def test_http_log_aliases_normalise_to_flow_features() -> None:
+    out = flow.normalise(
+        {
+            "url": "https://example.com/login",
+            "method": "POST",
+            "status_code": 200,
+            "request_bytes": 100,
+            "response_bytes": 2048,
+        }
+    )
+    assert out["protocol_type"] == "tcp"
+    assert out["service"] == "http"
+    assert out["flag"] == "SF"
+    assert out["src_bytes"] == 100
+    assert out["dst_bytes"] == 2048

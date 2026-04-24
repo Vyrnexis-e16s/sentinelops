@@ -1,4 +1,4 @@
-.PHONY: help up down build logs seed test test-backend test-frontend test-ml test-e2e lint format clean reset-db
+.PHONY: help up down build logs migrate seed test test-backend test-frontend test-ml test-e2e lint format clean reset-db
 
 help:
 	@echo "SentinelOps — useful targets"
@@ -7,6 +7,7 @@ help:
 	@echo "  make down          Stop the stack"
 	@echo "  make build         Rebuild all docker images"
 	@echo "  make logs          Tail logs from all services"
+	@echo "  make migrate       Apply backend database migrations"
 	@echo "  make seed          Load development events, users, and CVEs"
 	@echo "  make test          Run all test suites"
 	@echo "  make test-backend  pytest inside the backend container"
@@ -29,6 +30,9 @@ build:
 
 logs:
 	docker compose -f infra/docker/docker-compose.yml logs -f --tail=100
+
+migrate:
+	docker compose -f infra/docker/docker-compose.yml exec backend alembic upgrade head
 
 seed:
 	docker compose -f infra/docker/docker-compose.yml exec backend python -m app.scripts.seed

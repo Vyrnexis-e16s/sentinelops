@@ -135,9 +135,25 @@ async def create_job(
         }
         task = task_map.get(payload.kind)
         if task is not None:
-            task.delay(str(job.id), target.value, payload.params)
+            async_result = task.delay(str(job.id), target.value, payload.params)
+            job.result_json = {
+                **(job.result_json or {}),
+                "celery_task_id": async_result.id,
+                "queue": "recon",
+            }
+            await db.commit()
+            await db.refresh(job)
     except Exception as exc:  # noqa: BLE001
         log.warning("recon.enqueue_failed", job_id=str(job.id), error=str(exc))
+        job.status = "failed"
+        job.finished_at = datetime.now(tz=timezone.utc)
+        job.result_json = {
+            **(job.result_json or {}),
+            "error": "Failed to enqueue recon job. Check Redis/Celery worker.",
+            "detail": str(exc),
+        }
+        await db.commit()
+        await db.refresh(job)
 
     return JobOut.model_validate(job)
 

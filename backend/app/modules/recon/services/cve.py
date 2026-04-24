@@ -1,7 +1,17 @@
-"""NVD 2.0 CVE lookup by CPE, cached in Redis for 24h."""
+"""NVD 2.0 CVE lookup by CPE, cached in Redis for 24h.
+
+Accepts three forms of input:
+
+* Full CPE 2.3 URI (``cpe:2.3:a:nginx:nginx:1.25.3:*:*:*:*:*:*:*``) – sent as
+  the NVD ``cpeName`` exact match.
+* ``product``, ``product:version``, or ``vendor:product:version`` shortcut –
+  expanded into a CPE 2.3 match string and sent as ``virtualMatchString`` so
+  the NVD API performs partial matching with range semantics.
+"""
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import httpx
@@ -14,6 +24,33 @@ log = get_logger(__name__)
 
 CACHE_TTL = 60 * 60 * 24  # 24h
 CACHE_PREFIX = "recon:cve:"
+
+_CPE_SAFE_RE = re.compile(r"[^a-zA-Z0-9_.\-]")
+
+
+def build_cpe_match(raw: str) -> tuple[str, str]:
+    """Return (nvd_param_name, cpe_string).
+
+    ``nvd_param_name`` is either ``cpeName`` for an exact match on a complete
+    CPE or ``virtualMatchString`` for a shortcut that allows wildcards.
+    """
+    v = raw.strip()
+    if v.startswith("cpe:2.3:"):
+        return "cpeName", v
+
+    parts = [_CPE_SAFE_RE.sub("", p) for p in v.split(":") if p]
+    if not parts:
+        raise ValueError("CPE input is empty.")
+    if len(parts) == 1:
+        vendor = product = parts[0]
+        version = "*"
+    elif len(parts) == 2:
+        vendor = product = parts[0]
+        version = parts[1]
+    else:
+        vendor, product, version = parts[0], parts[1], parts[2]
+    cpe = f"cpe:2.3:a:{vendor}:{product}:{version}:*:*:*:*:*:*:*"
+    return "virtualMatchString", cpe
 
 
 async def _get_cache(redis: aioredis.Redis, key: str) -> dict[str, Any] | None:
@@ -33,24 +70,34 @@ async def _set_cache(redis: aioredis.Redis, key: str, value: dict[str, Any]) -> 
 async def query_cves(
     cpe_match: str, *, redis: aioredis.Redis, limit: int = 50
 ) -> dict[str, Any]:
-    """Query NVD by CPE match string. Returns {"vulnerabilities": [...]}."""
-    cache_key = f"cpe:{cpe_match}:{limit}"
+    """Query NVD by CPE string or ``product:version`` shortcut."""
+    try:
+        param_name, cpe_string = build_cpe_match(cpe_match)
+    except ValueError as exc:
+        return {"vulnerabilities": [], "error": str(exc)}
+
+    cache_key = f"{param_name}:{cpe_string}:{limit}"
     cached = await _get_cache(redis, cache_key)
     if cached is not None:
-        log.info("cve.cache.hit", cpe=cpe_match)
+        log.info("cve.cache.hit", cpe=cpe_string)
         return cached
 
-    params = {"cpeName": cpe_match, "resultsPerPage": str(limit)}
-    async with httpx.AsyncClient(timeout=settings.recon_timeout_seconds * 3) as client:
+    params = {param_name: cpe_string, "resultsPerPage": str(limit)}
+    async with httpx.AsyncClient(
+        timeout=settings.recon_timeout_seconds * 3,
+        headers={"User-Agent": "SentinelOps-Recon/1.0"},
+    ) as client:
         try:
             resp = await client.get(settings.nvd_api_base, params=params)
             resp.raise_for_status()
         except httpx.HTTPError as exc:
-            log.warning("cve.nvd.error", cpe=cpe_match, error=str(exc))
-            return {"vulnerabilities": [], "error": str(exc)}
+            log.warning("cve.nvd.error", cpe=cpe_string, error=str(exc))
+            return {"vulnerabilities": [], "error": str(exc), "cpe": cpe_string}
 
     data: dict[str, Any] = resp.json()
     summary = {
+        "cpe": cpe_string,
+        "match_type": param_name,
         "total_results": data.get("totalResults", 0),
         "vulnerabilities": [
             {

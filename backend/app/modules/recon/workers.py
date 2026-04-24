@@ -90,13 +90,23 @@ async def _run_subdomain(job_id: str, target: str, params: dict[str, Any]) -> di
             {
                 "severity": "info",
                 "title": f"Subdomain live: {h.name}",
-                "description": f"Resolved {h.name}",
-                "evidence": {"a": h.a_records, "aaaa": h.aaaa_records},
+                "description": f"Resolved {h.name} ({h.source})",
+                "evidence": {
+                    "a": h.a_records,
+                    "aaaa": h.aaaa_records,
+                    "source": h.source,
+                },
             }
             for h in hits
         ]
         await _persist_findings(db, uuid.UUID(job_id), findings)
-        job.result_json = {"count": len(hits), "hits": [h.name for h in hits]}
+        job.result_json = {
+            "count": len(hits),
+            "hits": [
+                {"name": h.name, "a": h.a_records, "aaaa": h.aaaa_records, "source": h.source}
+                for h in hits
+            ],
+        }
         await _set_status(db, uuid.UUID(job_id), "done")
         await db.commit()
 

@@ -24,6 +24,15 @@ const DEFAULT_FEATURES = `{
   "srv_serror_rate": 0.91
 }`;
 
+const HTTP_LOG_TEMPLATE = `{
+  "url": "https://example.com/login",
+  "method": "POST",
+  "status_code": 200,
+  "request_bytes": 850,
+  "response_bytes": 4200,
+  "duration": 0.12
+}`;
+
 function formatTs(iso: string) {
   try {
     return new Date(iso).toLocaleTimeString(undefined, { hour12: false });
@@ -71,23 +80,24 @@ export default function IdsPage() {
     setBusy(true);
     setResult(null);
     try {
-      const obj = JSON.parse(features) as Record<string, unknown>;
-      const featuresRecord: Record<string, number | string> = {};
-      for (const [k, v] of Object.entries(obj)) {
-        if (typeof v === "number" || typeof v === "string") {
-          featuresRecord[k] = v;
-        } else if (typeof v === "boolean") {
-          featuresRecord[k] = v ? 1 : 0;
-        } else {
-          featuresRecord[k] = String(v);
-        }
+      const parsed = JSON.parse(features) as Record<string, unknown> | Array<Record<string, unknown>>;
+      if (Array.isArray(parsed)) {
+        const flows = parsed.map(toFeatureRecord);
+        const out = await api.post<IdsInferenceResult[]>("/api/v1/ids/infer/bulk", {
+          flows
+        });
+        setResult(out.at(-1) ?? null);
+        setInfo(`Stored ${out.length} flow inference(s).`);
+        await loadModelAndHistory();
+        return;
       }
+      const featuresRecord = toFeatureRecord(parsed);
       const out = await api.post<IdsInferenceResult>("/api/v1/ids/infer", {
         features: featuresRecord,
-        explain: false
+        explain: true
       });
       setResult(out);
-      setInfo("Inference stored. Recent table refreshes on load; expand history after run.");
+      setInfo("Flow inference stored and audited.");
       await loadModelAndHistory();
     } catch (e) {
       const a = e as ApiError;
@@ -110,7 +120,7 @@ export default function IdsPage() {
       <SectionHeader
         eyebrow="Detection · ML"
         title="Network IDS"
-        description="RandomForest on NSL-KDD features. Paste a JSON object of feature names → values; inference runs on the real API and is persisted."
+        description="API-backed flow inference. Paste one JSON flow or an array of flows from NetFlow, Zeek, Suricata, proxy logs, or HTTP access logs. Raw website JS source is not network-flow telemetry."
       />
 
       {error && (
@@ -127,7 +137,7 @@ export default function IdsPage() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="glass rounded-xl p-4 lg:col-span-2">
           <div className="text-sm font-semibold flex items-center gap-2 mb-3">
-            <Radar className="h-4 w-4 text-accent" /> Inference playground
+            <Radar className="h-4 w-4 text-accent" /> Flow inference
           </div>
           <textarea
             value={features}
@@ -137,6 +147,14 @@ export default function IdsPage() {
             className="w-full h-56 bg-bg/60 border border-border/60 rounded-md p-3 font-mono text-xs outline-none focus:border-accent/60"
           />
           <div className="mt-3 flex items-center gap-3 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setFeatures(HTTP_LOG_TEMPLATE)}
+              disabled={busy}
+              className="text-xs px-3 py-1.5 rounded-md border border-border/70 hover:border-accent/60 disabled:opacity-50"
+            >
+              Load HTTP log template
+            </button>
             <button
               type="button"
               onClick={() => void runInference()}
@@ -201,6 +219,18 @@ export default function IdsPage() {
           ) : (
             <p className="text-xs text-muted">Loading model metadata…</p>
           )}
+          {modelInfo?.feature_list?.length ? (
+            <details className="mt-4 text-xs">
+              <summary className="cursor-pointer text-muted">Accepted canonical features</summary>
+              <div className="mt-2 max-h-36 overflow-auto font-mono text-[11px] text-muted">
+                {modelInfo.feature_list.join(", ")}
+              </div>
+              <p className="mt-2 text-[11px] text-muted">
+                Common aliases accepted by the API include protocol/proto, service/app, bytes/request_bytes,
+                response_bytes, url, method, and status_code.
+              </p>
+            </details>
+          ) : null}
         </div>
       </div>
 
@@ -253,4 +283,18 @@ export default function IdsPage() {
       </div>
     </div>
   );
+}
+
+function toFeatureRecord(obj: Record<string, unknown>): Record<string, number | string> {
+  const featuresRecord: Record<string, number | string> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (typeof v === "number" || typeof v === "string") {
+      featuresRecord[k] = v;
+    } else if (typeof v === "boolean") {
+      featuresRecord[k] = v ? 1 : 0;
+    } else if (v != null) {
+      featuresRecord[k] = JSON.stringify(v);
+    }
+  }
+  return featuresRecord;
 }

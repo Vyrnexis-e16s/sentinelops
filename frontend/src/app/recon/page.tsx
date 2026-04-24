@@ -1,9 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import type { ElementType } from "react";
 import { motion } from "framer-motion";
-import { Crosshair, Globe2, Plug, Plus } from "lucide-react";
+import { Play } from "lucide-react";
 import SectionHeader from "@/components/shared/SectionHeader";
 import {
   api,
@@ -45,6 +44,9 @@ function statusPillClass(status: string) {
 
 export default function ReconPage() {
   const [target, setTarget] = useState("");
+  const [selectedKind, setSelectedKind] = useState<JobKind>("subdomain");
+  const [cpe, setCpe] = useState("");
+  const [ports, setPorts] = useState("80,443,8080,8443");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -89,12 +91,48 @@ export default function ReconPage() {
     return () => clearInterval(t);
   }, [jobs, loadLists]);
 
+  const buildParams = (kind: JobKind, v: string): Record<string, unknown> => {
+    if (kind === "port") {
+      const parsed = ports
+        .split(/[,\s]+/)
+        .map((p) => Number.parseInt(p, 10))
+        .filter((p) => Number.isInteger(p) && p > 0 && p <= 65535);
+      return parsed.length ? { ports: [...new Set(parsed)] } : {};
+    }
+    if (kind === "cve") {
+      return { cpe: cpe.trim() || v };
+    }
+    return {};
+  };
+
+  const validateJob = (kind: JobKind, v: string): string | null => {
+    const targetKind = inferTargetKind(v);
+    if (kind === "subdomain" && targetKind !== "domain") {
+      return "Subdomain enumeration needs a domain such as example.com, not an IP/CIDR.";
+    }
+    if (kind === "port" && targetKind === "cidr") {
+      return "Port scan currently accepts one host/IP at a time. Enter a host or IP, not CIDR.";
+    }
+    if (kind === "cve") {
+      const candidate = (cpe.trim() || v).trim();
+      if (!candidate) {
+        return "CVE lookup needs either a product:version shortcut (e.g. nginx:1.25.3) or a full CPE 2.3 name.";
+      }
+    }
+    return null;
+  };
+
   const runJob = async (kind: JobKind) => {
     setInfo(null);
     setError(null);
     const v = target.trim();
     if (!v) {
       setError("Enter a target (domain, host, or CIDR).");
+      return;
+    }
+    const validation = validateJob(kind, v);
+    if (validation) {
+      setError(validation);
       return;
     }
     setBusy(true);
@@ -106,10 +144,10 @@ export default function ReconPage() {
       await api.post<ReconJob>("/api/v1/recon/jobs", {
         target_id: tk.id,
         kind,
-        params: {}
+        params: buildParams(kind, v)
       });
       setInfo(
-        `Queued ${kind} job for ${v}. Ensure the Celery worker is running (docker compose) or jobs stay queued.`
+        `Queued ${kind} job for ${v}. The Docker worker now listens to the recon queue; status will update here.`
       );
       await loadLists();
     } catch (e) {
@@ -129,7 +167,7 @@ export default function ReconPage() {
       <SectionHeader
         eyebrow="Red team"
         title="Recon"
-        description="Subdomain enum, port scan, CVE lookup, web fuzzing. Test what you own. Uses the real API (requires auth + Celery worker for execution)."
+        description="Run subdomain enumeration (DNS brute-force + crt.sh Certificate Transparency), TCP port scan with banner grab, NVD CVE lookup (full CPE or product:version shortcut), and common-path web fuzzing against real hosts. Only scan assets you own or are authorised to assess; configure RECON_TARGET_ALLOWLIST in production."
       />
 
       {error && (
@@ -155,33 +193,60 @@ export default function ReconPage() {
               placeholder="domain, host, or CIDR"
             />
           </div>
-          <Action
-            label="Subdomain enum"
-            icon={Globe2}
-            disabled={busy}
-            onClick={() => void runJob("subdomain")}
-          />
-          <Action
-            label="Port scan"
-            icon={Plug}
-            disabled={busy}
-            onClick={() => void runJob("port")}
-          />
-          <Action
-            label="CVE lookup"
-            icon={Crosshair}
-            disabled={busy}
-            onClick={() => void runJob("cve")}
-          />
+          <div className="min-w-[180px]">
+            <label className="text-[11px] text-muted uppercase tracking-wider">Job</label>
+            <select
+              value={selectedKind}
+              onChange={(e) => setSelectedKind(e.target.value as JobKind)}
+              disabled={busy}
+              className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-2 text-sm outline-none focus:border-accent/60"
+            >
+              <option value="subdomain">Subdomain enum</option>
+              <option value="port">Port scan</option>
+              <option value="cve">CVE lookup</option>
+              <option value="webfuzz">Web fuzz</option>
+            </select>
+          </div>
+          {selectedKind === "port" && (
+            <div className="min-w-[220px]">
+              <label className="text-[11px] text-muted uppercase tracking-wider">Ports</label>
+              <input
+                value={ports}
+                onChange={(e) => setPorts(e.target.value)}
+                disabled={busy}
+                className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-2 text-sm font-mono outline-none focus:border-accent/60"
+                placeholder="80,443,8080"
+              />
+            </div>
+          )}
+          {selectedKind === "cve" && (
+            <div className="flex-1 min-w-[320px]">
+              <label className="text-[11px] text-muted uppercase tracking-wider">
+                CPE or product:version
+              </label>
+              <input
+                value={cpe}
+                onChange={(e) => setCpe(e.target.value)}
+                disabled={busy}
+                className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-2 text-sm font-mono outline-none focus:border-accent/60"
+                placeholder="nginx:1.25.3  or  cpe:2.3:a:nginx:nginx:1.25.3:*:*:*:*:*:*:*"
+              />
+            </div>
+          )}
           <button
             type="button"
             disabled={busy}
-            onClick={() => void runJob("subdomain")}
-            className="text-xs px-3 py-2 rounded-md bg-accent/15 text-accent border border-accent/40 hover:bg-accent/25 inline-flex items-center gap-1 disabled:opacity-50"
+            onClick={() => void runJob(selectedKind)}
+            className="text-xs px-4 py-2 rounded-md bg-accent/20 text-accent border border-accent/50 hover:bg-accent/30 inline-flex items-center gap-1.5 disabled:opacity-50"
           >
-            <Plus className="h-3.5 w-3.5" /> Run job
+            <Play className="h-3.5 w-3.5" />
+            {busy ? "Queueing…" : "Run job"}
           </button>
         </div>
+        <p className="text-[11px] text-muted mt-3">
+          Subdomain → a domain (example.com). Port scan → single host or IP. CVE → full CPE 2.3 or
+          shortcut like <span className="font-mono">nginx:1.25.3</span>. Web fuzz → http(s) URL or host.
+        </p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -189,30 +254,6 @@ export default function ReconPage() {
         <JobsCard jobs={jobs} targetById={targetById} />
       </div>
     </div>
-  );
-}
-
-function Action({
-  label,
-  icon: Icon,
-  onClick,
-  disabled
-}: {
-  label: string;
-  icon: ElementType;
-  onClick: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      className="text-xs px-3 py-2 rounded-md border border-border/60 hover:border-accent/60 inline-flex items-center gap-1.5 disabled:opacity-50"
-    >
-      <Icon className="h-3.5 w-3.5 text-accent" />
-      {label}
-    </button>
   );
 }
 
@@ -272,6 +313,11 @@ function JobsCard({
                 <span className={`ml-auto text-[11px] px-2 py-0.5 rounded-full ${statusPillClass(j.status)}`}>
                   {j.status}
                 </span>
+                {typeof j.result_json?.error === "string" && (
+                  <span className="basis-full text-danger/90 break-words">
+                    {j.result_json.error}
+                  </span>
+                )}
               </li>
             );
           })}
