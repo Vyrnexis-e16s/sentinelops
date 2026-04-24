@@ -103,12 +103,59 @@ CI runs the same commands on every push and on pull requests into `main`.
 
 Because this is a portfolio piece, I wanted to be honest about what's here versus what a production build would need. A running list of known gaps and interesting extensions lives in [`docs/ROADMAP.md`](docs/ROADMAP.md). Highlights:
 
-- Rule engine for SIEM (Sigma rule compiler)
-- STIX/TAXII feed ingestion
-- Distributed recon with dedicated worker fleet
-- Online learning for the IDS model (drift detection)
-- HSM-backed KEKs in Vault (currently software KEKs)
-- Multi-tenant separation and RBAC beyond the single-org model
+**Detection & SIEM**
+- Sigma rule compiler — parse Sigma YAML into the native detection AST so the community rule packs work out of the box.
+- STIX/TAXII feed ingestion for threat intel, with automatic enrichment of incoming events against known IOCs.
+- WebSocket live alert stream on the dashboard (plumbing exists, UI binding pending).
+- UEBA baseline per user/host — deviation scoring beyond the current IQR+z detector.
+- Kafka/Redpanda event bus option for high-throughput ingest, replacing the current direct-to-Postgres path.
+
+**Offensive / Recon**
+- Distributed recon with a dedicated worker fleet and rate-limit-aware scheduling.
+- Authenticated web scanning (session replay + JWT bearer support).
+- Nuclei-compatible template runner so the community library works against the same target model.
+- Recon scheduler with diff alerts — notify when a target's attack surface changes between runs.
+
+**ML & Network IDS**
+- Online learning for the IDS model with drift detection, confidence-gated rollout, and shadow inference.
+- Expand training data beyond NSL-KDD — CIC-IDS2017 / UNSW-NB15 / custom PCAP captures.
+- Explainable predictions via SHAP so the analyst sees *why* a flow was flagged.
+- Optional GPU inference path for the heavier models.
+
+**Crypto & Vault**
+- HSM-backed KEKs via PKCS#11 — SoftHSM for local, AWS CloudHSM / GCP Cloud HSM for prod. Currently uses software KEKs.
+- Key rotation flow (wrap-unwrap-rewrap) with zero downtime.
+- Post-quantum KEM hybrid for the key-wrap step (Kyber alongside the existing KDF).
+- S3 / MinIO object-storage backend instead of local filesystem.
+
+**Platform & Operations**
+- Multi-tenant separation and proper RBAC (workspace → team → user) with row-level security in Postgres.
+- SSO via OIDC (Auth0 / Okta / Keycloak) on top of the existing WebAuthn baseline.
+- Case management — group related alerts into investigations, assign owners, track state and SLA.
+- Observability: OpenTelemetry traces, Prometheus metrics, a Grafana dashboard pack.
+- Helm chart + Terraform module for one-command deploys to EKS / GKE / AKS.
+
+**UX & Accessibility**
+- Mobile-responsive variant of the dashboard (currently degrades to tablet only).
+- Full keyboard navigation + screen-reader pass — the animations should never get in the way of operating the app.
+- Command palette (Cmd-K) with cross-module search.
+
+**Research / experimental**
+- LLM-assisted alert triage — local model served via vLLM, no paid-API default.
+- Graph-based attack reconstruction in Neo4j, BFS from high-severity nodes to surface the kill chain.
+- eBPF host-telemetry agent (tiny Go binary, no kernel modules) streaming syscalls + network events into the SIEM module.
+
+## Legal and ethical use
+
+**Read this before running anything.** SentinelOps contains offensive security tooling — port scanners, subdomain brute-forcers, and a web path fuzzer — bundled with the defensive pieces. Those capabilities are there so you can practise the full attacker-defender loop in a lab you own. They are **not** a licence to test networks you don't own.
+
+- Only run the `recon` module against hosts, domains, and IP ranges that you own, that your employer has contracted you to test, or for which you hold explicit written authorisation (a bug-bounty program in-scope list counts, out-of-scope does not).
+- Unauthorised scanning, credential harvesting, or traffic interception against third-party systems is illegal in most jurisdictions (CFAA in the US, Computer Misuse Act in the UK, IT Act in India, etc.) — getting caught is on you.
+- The cryptographic primitives in this codebase are fit for portfolio-grade demos. **Do not** put production secrets, PII, or regulated data in a SentinelOps Vault instance without first replacing the software master key with a real HSM/KMS and going through a proper review.
+- The ML IDS model is trained on NSL-KDD, which is a teaching dataset with well-known coverage gaps. It is **not** a substitute for a commercial IDS on a real network.
+- This software is provided **"AS IS"**, without warranty of any kind (see the Apache 2.0 `LICENSE` file for the formal language). The authors and contributors accept no liability for damage, downtime, legal trouble, or any other consequence arising from your use of this code. You are the sole responsible party for how, where, and against what you run it.
+
+If any of the above is unclear, stop and get advice before running the tool — don't guess.
 
 ## Security
 
@@ -116,7 +163,7 @@ If you find a vulnerability, please see [SECURITY.md](SECURITY.md) for disclosur
 
 ## License
 
-MIT — see [LICENSE](LICENSE). You can use this commercially, but remember the recon module is designed for authorised testing only; how you use it is on you.
+Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE). The Apache 2.0 license grants you broad rights (commercial use, modification, distribution, sublicensing) in exchange for retaining attribution and the license notice, and it includes a patent grant that MIT does not. It also ships with an explicit **Disclaimer of Warranty** and **Limitation of Liability** — how you use this project is entirely your responsibility (see the section above).
 
 ## Acknowledgements
 

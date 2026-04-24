@@ -36,6 +36,26 @@ What's here now, what's next, and what I deliberately chose not to build yet. Th
 - **LLM-assisted alert triage.** Give the analyst a summary of what happened, why it fired, and what to check next. Probably a local model served via vLLM — I don't want to wire this to a paid API by default.
 - **Graph-based attack reconstruction.** Load alerts into a Neo4j graph, run BFS from high-severity nodes to surface the kill chain.
 - **eBPF-based host telemetry agent.** Tiny Go binary that streams syscalls + network events into the SIEM module without kernel modules.
+- **Post-quantum key-wrap.** Kyber (ML-KEM) alongside the existing HKDF-based wrap so Vault secrets survive the harvest-now-decrypt-later era.
+- **Explainable IDS predictions.** SHAP per-flow so the analyst sees which features drove the classification.
+- **UEBA baselines.** Per-user / per-host behavioural baselines with deviation scoring on top of the current static detectors.
+- **Deception / honey-tokens.** Salted fake credentials inside Vault that fire a high-severity alert the moment they're accessed.
+
+## Platform & operations
+
+- **OpenTelemetry everywhere.** Traces from the API through Celery through the frontend, with a Grafana/Tempo/Prometheus pack shipped in `infra/observability/`.
+- **Helm chart + Terraform module** for one-command deploys to EKS / GKE / AKS.
+- **Command palette (Cmd-K)** with cross-module search so you can jump from a SIEM alert to the related recon target to the vault audit entry without leaving the keyboard.
+- **Accessibility pass.** Full keyboard navigation, screen-reader labels on every interactive element, respect for `prefers-reduced-motion` across all Framer Motion animations.
+- **Mobile-responsive dashboard.** Currently degrades to tablet; needs a deliberate small-screen pass.
+- **i18n scaffolding.** `next-intl` with English as the seed locale.
+
+## Data & ML
+
+- **CIC-IDS2017 / UNSW-NB15** added to the training pipeline alongside NSL-KDD, with a dataset selector flag.
+- **GPU inference path** (ONNX Runtime w/ CUDA) for the heavier models.
+- **Synthetic traffic generator** to fuzz the detection pipeline end-to-end.
+- **Feature store** (Feast) so offline training features match online inference features.
 
 ## Known gaps / explicit non-goals
 

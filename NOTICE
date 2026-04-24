@@ -1,0 +1,33 @@
+SentinelOps
+Copyright 2026 Vyrnexis-e16s
+
+This product includes software developed by Vyrnexis-e16s and contributors.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use this file except in compliance with the License. You may obtain a copy
+of the License at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+---
+
+SentinelOps contains offensive security tooling (the `recon` module) intended
+strictly for authorised security assessment, CTF practice, and research on
+systems the operator owns or has explicit written permission to test.
+
+The authors and contributors are not responsible for any misuse, damage,
+unlawful activity, or loss resulting from the use of this software. By
+using, copying, modifying, or distributing this software, you agree that
+the responsibility for how it is used rests solely with you.
+
+See the LICENSE file, the "Legal and ethical use" section of README.md, and
+SECURITY.md for additional terms.
+
+---
+
+This product uses (but does not redistribute) the following datasets and
+taxonomies for educational purposes; their licensing is the responsibility
+of the data provider:
+
+- NSL-KDD dataset (University of New Brunswick, Canadian Institute for Cybersecurity)
+- MITRE ATT&CK framework (MITRE Corporation)
