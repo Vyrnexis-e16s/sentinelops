@@ -3,17 +3,21 @@
  * rewrite, so the same URL works in dev (rewritten) and prod (same-origin).
  */
 
+import { getAccessToken } from "@/lib/auth";
+
 export type ApiError = { status: number; detail: string };
 
 async function request<T>(
   path: string,
   init: RequestInit = {}
 ): Promise<T> {
+  const token = getAccessToken();
   const res = await fetch(path, {
     ...init,
     headers: {
       "Content-Type": "application/json",
       Accept: "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init.headers || {})
     },
     credentials: "include"
@@ -48,10 +52,14 @@ export type Alert = {
   id: string;
   event_id: string;
   rule_id: string | null;
+  rule_name: string | null;
   score: number;
   status: "new" | "ack" | "resolved" | "false_positive";
   created_at: string;
+  alert_kind?: string | null;
 };
+
+export type Paginated<T> = { items: T[]; page: number; size: number; total: number };
 
 export type Inference = {
   id: string;

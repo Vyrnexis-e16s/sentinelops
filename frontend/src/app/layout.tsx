@@ -4,6 +4,7 @@ import { ThemeProvider } from "@/lib/theme";
 import Sidebar from "@/components/shared/Sidebar";
 import Topbar from "@/components/shared/Topbar";
 import ThemeBackdrop from "@/components/shared/ThemeBackdrop";
+import { CommandPalette } from "@/components/shared/CommandPalette";
 
 export const metadata: Metadata = {
   title: "SentinelOps — Unified Security Operations",
@@ -17,6 +18,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <ThemeProvider>
           <ThemeBackdrop />
+          <CommandPalette />
           <div className="relative z-10 flex min-h-screen">
             <Sidebar />
             <div className="flex-1 flex flex-col min-w-0">

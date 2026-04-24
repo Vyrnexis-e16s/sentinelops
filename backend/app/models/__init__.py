@@ -33,7 +33,13 @@ from app.models.webauthn import WebAuthnCredential  # noqa: E402,F401
 # ------- module models --------
 from app.modules.ids.models import Inference  # noqa: E402,F401
 from app.modules.recon.models import Finding, ReconJob, Target  # noqa: E402,F401
-from app.modules.siem.models import Alert, DetectionRule, Event  # noqa: E402,F401
+from app.modules.siem.models import (  # noqa: E402,F401
+    Alert,
+    DetectionRule,
+    Event,
+    Investigation,
+    ThreatIoc,
+)
 from app.modules.vault.models import VaultAccessGrant, VaultObject  # noqa: E402,F401
 
 __all__ = [
@@ -44,6 +50,8 @@ __all__ = [
     "Event",
     "DetectionRule",
     "Alert",
+    "ThreatIoc",
+    "Investigation",
     "Target",
     "ReconJob",
     "Finding",

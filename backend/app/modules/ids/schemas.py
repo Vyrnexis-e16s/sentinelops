@@ -12,6 +12,10 @@ class InferenceRequest(BaseModel):
     """A single flow's features. Missing values are imputed with training medians."""
 
     features: dict[str, float | int | str] = Field(default_factory=dict)
+    explain: bool = Field(
+        default=False,
+        description="If true, return a tree-model feature weight proxy (not full SHAP).",
+    )
 
 
 class BulkInferenceRequest(BaseModel):
@@ -25,6 +29,7 @@ class InferenceResult(BaseModel):
     probability: float
     label: str
     attack_class: str | None = None
+    explanation: dict[str, Any] | None = None
 
 
 class ModelInfo(BaseModel):
@@ -36,3 +41,10 @@ class ModelInfo(BaseModel):
     artifact_present: bool
     artifact_path: str
     notes: str | None = None
+
+
+class DriftFeatureSummary(BaseModel):
+    feature: str
+    status: str
+    n_samples: int
+    stats: dict[str, Any] = Field(default_factory=dict)

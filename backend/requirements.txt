@@ -40,6 +40,10 @@ scikit-learn==1.5.2
 # --- Observability ---
 structlog==24.4.0
 prometheus-client==0.21.0
+prometheus-fastapi-instrumentator==7.0.0
+
+# --- Rules / STIX helpers ---
+PyYAML==6.0.2
 
 # --- Utilities ---
 python-dotenv==1.0.1

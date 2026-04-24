@@ -165,7 +165,26 @@ def model_info() -> dict[str, Any]:
     }
 
 
-def predict(features: dict[str, Any]) -> dict[str, Any]:
+def _feature_explanation_proxy(
+    model: Any, feature_list: list[str], row: list[float]
+) -> list[dict[str, Any]]:
+    """Rank features by |value| * global importance (SHAP-style proxy, no Shapley values)."""
+    imp = getattr(model, "feature_importances_", None)
+    if imp is None or len(imp) != len(row):
+        return []
+    scores = [float(abs(imp[i]) * abs(float(row[i]))) for i in range(len(row))]
+    ranked = sorted(enumerate(scores), key=lambda t: t[1], reverse=True)[:8]
+    return [
+        {
+            "feature": feature_list[i],
+            "weight": float(imp[i]),
+            "contribution": float(s),
+        }
+        for i, s in ranked
+    ]
+
+
+def predict(features: dict[str, Any], *, with_explain: bool = False) -> dict[str, Any]:
     """Run inference for one flow and return a result dict."""
     bundle = _load_model()
     model = bundle["model"]
@@ -179,7 +198,7 @@ def predict(features: dict[str, Any]) -> dict[str, Any]:
     label = "benign" if pred_str in ("normal", "benign", "0") else "attack"
     attack_class = ATTACK_CLASS_MAP.get(pred_str, None if label == "benign" else "other")
 
-    return {
+    out: dict[str, Any] = {
         "timestamp": datetime.now(tz=timezone.utc),
         "features": features,
         "prediction": pred_str,
@@ -187,6 +206,11 @@ def predict(features: dict[str, Any]) -> dict[str, Any]:
         "label": label,
         "attack_class": attack_class,
     }
+    if with_explain:
+        ex = _feature_explanation_proxy(model, feature_list, row)
+        if ex:
+            out["explanation"] = {"method": "importance_x_abs_value", "top_features": ex}
+    return out
 
 
 def predict_bulk(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

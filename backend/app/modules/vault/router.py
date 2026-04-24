@@ -5,7 +5,7 @@ import uuid
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -134,13 +134,13 @@ async def download_file(
     )
 
 
-@router.delete("/files/{object_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/files/{object_id}")
 async def delete_file(
     object_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
     user: User = Depends(current_user),
     audit=Depends(audit_logger),
-) -> None:
+) -> Response:
     obj = (
         await db.execute(select(VaultObject).where(VaultObject.id == object_id))
     ).scalar_one_or_none()
@@ -151,7 +151,6 @@ async def delete_file(
 
     storage.delete_blob(obj.storage_path)
     await db.delete(obj)
-    await db.commit()
     await audit.append(
         actor_id=user.id,
         action="vault.delete",
@@ -159,6 +158,8 @@ async def delete_file(
         resource_id=str(object_id),
         metadata={"name": obj.name},
     )
+    await db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.post("/files/{object_id}/share", response_model=schemas.GrantOut, status_code=201)

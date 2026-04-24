@@ -13,6 +13,7 @@ from app.models import User
 from app.modules.ids import schemas
 from app.modules.ids.models import Inference
 from app.modules.ids.services import flow, inference
+from app.modules.ids.services.drift import feature_drift_for_key
 from app.services.audit import audit_logger
 
 router = APIRouter(prefix="/ids", tags=["ids"])
@@ -36,7 +37,7 @@ async def infer(
     _ensure_available()
     feats = flow.normalise(payload.features)
     try:
-        result = inference.predict(feats)
+        result = inference.predict(feats, with_explain=payload.explain)
     except inference.ModelUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -67,6 +68,7 @@ async def infer(
         probability=row.probability,
         label=row.label,
         attack_class=row.attack_class,
+        explanation=result.get("explanation"),
     )
 
 
@@ -116,6 +118,7 @@ async def infer_bulk(
             probability=p.probability,
             label=p.label,
             attack_class=p.attack_class,
+            explanation=None,
         )
         for p in persisted
     ]
@@ -140,6 +143,7 @@ async def list_inferences(
             probability=r.probability,
             label=r.label,
             attack_class=r.attack_class,
+            explanation=None,
         )
         for r in rows
     ]
@@ -148,3 +152,23 @@ async def list_inferences(
 @router.get("/model/info", response_model=schemas.ModelInfo)
 async def model_info_route(user: User = Depends(current_user)) -> Any:
     return schemas.ModelInfo(**inference.model_info())
+
+
+@router.get("/drift/summary", response_model=schemas.DriftFeatureSummary)
+async def drift_summary(
+    feature: str = Query("serror_rate", min_length=1, max_length=64),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(current_user),
+) -> Any:
+    """Rolling stats for one numeric feature in recent stored inferences (drift / QA)."""
+    s = await feature_drift_for_key(db, feature, limit=500)
+    if s is None:
+        return schemas.DriftFeatureSummary(
+            feature=feature, status="insufficient_data", n_samples=0, stats={}
+        )
+    return schemas.DriftFeatureSummary(
+        feature=feature,
+        status="ok",
+        n_samples=s.n_samples,
+        stats=s.to_dict(),
+    )

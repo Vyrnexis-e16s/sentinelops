@@ -10,13 +10,15 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.db import get_db
 from app.core.errors import NotFoundError
 from app.core.logging import get_logger
 from app.core.security import current_user
 from app.models.user import User
-from app.modules.siem.models import Alert, DetectionRule, Event
+from app.modules.siem.models import Alert, DetectionRule, Event, ThreatIoc
+from app.modules.siem.services import intel_enrich
 from app.modules.siem.schemas import (
     AlertOut,
     AlertStatus,
@@ -148,10 +150,53 @@ async def _ingest_one(
                     "score": match.score,
                     "severity": match.severity,
                     "attack": match.technique_ids,
+                    "kind": "detection",
                 },
             )
         except Exception as exc:  # pragma: no cover - best effort
             log.warning("alert_publish_failed", error=str(exc))
+
+    ioc_rows = (await db.execute(select(ThreatIoc.ioc_type, ThreatIoc.value))).all()
+    if ioc_rows:
+        known = {(t, v) for t, v in ioc_rows}
+        cands = intel_enrich.collect_candidate_tokens(doc)
+        hits = intel_enrich.find_ioc_hits(cands, known)
+        if hits:
+            seen: set[str] = set()
+            for t, v in hits:
+                key = f"{t}:{v}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                tags = list(event.tags_array or [])
+                for tag in (f"ioc:{t}", "ioc:match"):
+                    if tag not in tags:
+                        tags.append(tag)
+                event.tags_array = tags
+                a2 = Alert(
+                    id=uuid.uuid4(),
+                    event_id=event.id,
+                    rule_id=None,
+                    score=8.2,
+                    status="new",
+                )
+                db.add(a2)
+                alerts_created += 1
+                try:
+                    await publish(
+                        CHANNEL_ALERTS,
+                        {
+                            "id": str(a2.id),
+                            "event_id": str(event.id),
+                            "rule": "threat.intel.ioc",
+                            "score": 8.2,
+                            "severity": "high",
+                            "attack": ["T001"],
+                            "kind": "threat_intel",
+                        },
+                    )
+                except Exception as exc:  # pragma: no cover
+                    log.warning("alert_publish_failed", error=str(exc))
 
     log.info(
         "event_ingested",
@@ -333,16 +378,32 @@ async def list_alerts(
     size: int = Query(50, ge=1, le=500),
     status: AlertStatus | None = None,
 ) -> Paginated[AlertOut]:
-    q = select(Alert)
+    q = select(Alert).options(selectinload(Alert.rule))
     c = select(func.count(Alert.id))
     if status:
-        q = q.where(Alert.status == status)
-        c = c.where(Alert.status == status)
+        st = status
+        q = q.where(Alert.status == st)
+        c = c.where(Alert.status == st)
     total = (await db.execute(c)).scalar_one()
     q = q.order_by(Alert.created_at.desc()).offset((page - 1) * size).limit(size)
-    rows = (await db.execute(q)).scalars().all()
+    rows = (await db.execute(q)).scalars().unique().all()
+    items: list[AlertOut] = []
+    for a in rows:
+        items.append(
+            AlertOut(
+                id=a.id,
+                event_id=a.event_id,
+                rule_id=a.rule_id,
+                rule_name=a.rule.name if a.rule else None,
+                score=a.score,
+                status=a.status,
+                created_at=a.created_at,
+                assigned_to_id=a.assigned_to_id,
+                alert_kind="threat_intel" if a.rule_id is None else "detection",
+            )
+        )
     return Paginated[AlertOut](
-        items=[AlertOut.model_validate(r) for r in rows], page=page, size=size, total=total
+        items=items, page=page, size=size, total=total
     )
 
 

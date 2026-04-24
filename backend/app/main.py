@@ -22,6 +22,7 @@ from app.core.redis import close_redis, init_redis
 from app.modules.ids.router import router as ids_router
 from app.modules.recon.router import router as recon_router
 from app.modules.siem.router import router as siem_router
+from app.modules.siem import intel_routes, ws_routes
 from app.modules.vault.router import router as vault_router
 
 log = structlog.get_logger(__name__)
@@ -73,9 +74,11 @@ def create_app() -> FastAPI:
     # ------- routers --------
     app.include_router(auth_router, prefix="/api/v1")
     app.include_router(siem_router, prefix="/api/v1")
+    app.include_router(intel_routes.router, prefix="/api/v1")
     app.include_router(recon_router, prefix="/api/v1")
     app.include_router(ids_router, prefix="/api/v1")
     app.include_router(vault_router, prefix="/api/v1")
+    app.include_router(ws_routes.router, prefix="/ws")
 
     # ------- ops endpoints --------
     @app.get("/", include_in_schema=False)
@@ -96,8 +99,7 @@ def create_app() -> FastAPI:
             return JSONResponse({"status": "degraded", "error": str(exc)}, status_code=503)
         return JSONResponse({"status": "ready"})
 
-    if settings.is_production:
-        # Lazily attach prometheus instrumentation only in prod to keep dev fast.
+    if settings.expose_prometheus or settings.is_production:
         try:
             from prometheus_fastapi_instrumentator import Instrumentator
 

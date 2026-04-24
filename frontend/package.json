@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@simplewebauthn/browser": "^11.0.0",
+    "cmdk": "^1.0.0",
     "clsx": "^2.1.1",
     "framer-motion": "^11.11.7",
     "lucide-react": "^0.451.0",

@@ -66,6 +66,15 @@ class Settings(BaseSettings):
     # --- IDS ---
     ids_model_path: str = Field("/app/ml/artifacts/ids_rf.joblib", alias="IDS_MODEL_PATH")
 
+    # --- Ops / optional integrations (placeholders, see docs/ROADMAP.md) ---
+    expose_prometheus: bool = Field(True, alias="EXPOSE_PROMETHEUS")
+    kafka_bootstrap: str = Field("", alias="KAFKA_BOOTSTRAP")
+    oidc_issuer: str = Field("", alias="OIDC_ISSUER")
+    s3_vault_endpoint: str = Field("", alias="S3_VAULT_ENDPOINT")
+    pqc_kyber_hybrid: bool = Field(False, alias="PQC_KYBER_HYBRID")
+    hsm_pkcs11_lib: str = Field("", alias="HSM_PKCS11_LIB")
+    neograph_uri: str = Field("", alias="NEO4J_URI")
+
     # --- CORS ---
     cors_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000"]

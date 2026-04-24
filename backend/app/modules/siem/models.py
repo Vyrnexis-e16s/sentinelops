@@ -22,6 +22,10 @@ def _mutable_list() -> list[str]:
     return []
 
 
+def _empty_str_list() -> list[str]:
+    return []
+
+
 def _mutable_dict() -> dict[str, Any]:
     return {}
 
@@ -60,6 +64,40 @@ class DetectionRule(Base):
     )
 
     alerts: Mapped[list["Alert"]] = relationship(back_populates="rule")
+
+
+class ThreatIoc(Base):
+    __tablename__ = "siem_threat_iocs"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    ioc_type: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    value: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+    stix_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    source: Mapped[str] = mapped_column(String(200), nullable=False, default="stix")
+    metadata_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=_mutable_dict)
+    created_at: Mapped[datetime] = mapped_column(
+        nullable=False, default=lambda: datetime.now(tz=timezone.utc)
+    )
+
+
+class Investigation(Base):
+    __tablename__ = "siem_investigations"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    title: Mapped[str] = mapped_column(String(300), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="open", index=True)
+    owner_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # JSON list of alert id strings (ORM/DB portable).
+    alert_ids_array: Mapped[list[str]] = mapped_column("alert_ids", JSON, nullable=False, default=_empty_str_list)
+    created_at: Mapped[datetime] = mapped_column(
+        nullable=False, default=lambda: datetime.now(tz=timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        nullable=False, default=lambda: datetime.now(tz=timezone.utc)
+    )
 
 
 class Alert(Base):

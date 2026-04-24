@@ -60,6 +60,32 @@ Then:
 
 `make seed` loads a few weeks of fake SIEM events and a handful of known-bad CVEs so the dashboard isn't empty.
 
+## Portfolio proof (screenshots)
+
+Add PNGs under [`docs/screenshots/`](docs/screenshots/) and reference them here. Suggested shots — capture **after** `make up` and `make seed`, signed in (or with a dev JWT) so the API-backed panels are populated.
+
+| # | Suggested filename | **Exactly where to capture (URL + what to show)** |
+|---|-------------------|-----------------------------------------------|
+| 1 | `01-dashboard.png` | `http://localhost:3000/dashboard` — full page: stat cards, globe, **Recent alerts** (REST and/or live WS if a JWT is in `localStorage` key `sentinelops_access_token`), module tiles. |
+| 2 | `02-siem.png` | `http://localhost:3000/siem` — table of alerts and rules list (or disconnect banner + fallback if unauthenticated). |
+| 3 | `03-recon.png` | `http://localhost:3000/recon` — target list and job state after a scan. |
+| 4 | `04-ids.png` | `http://localhost:3000/ids` — inference / feature strip. |
+| 5 | `05-vault.png` | `http://localhost:3000/vault` — encrypted object list. |
+| 6 | `06-api-docs.png` | `http://localhost:8000/docs` — Swagger with SIEM, Sigma, STIX, IDS drift endpoints visible. |
+| 7 | `07-metrics.png` | `http://localhost:8000/metrics` — Prometheus text export (if `EXPOSE_PROMETHEUS=true`). |
+| 8 | `08-command-palette.png` | `http://localhost:3000/dashboard` with **⌘K / Ctrl+K** — command palette open. |
+| 9 | `09-themes.png` | Any page with the theme control used to show **Tactical** vs **Quantum Aurora**. |
+
+**How to get a JWT for real UI data:** use **Authorize** in Swagger on `http://localhost:8000/docs` after registering a passkey, or run WebAuthn from the app and copy the token into `localStorage` as `sentinelops_access_token` (or set `NEXT_PUBLIC_DEV_TOKEN` in `.env.local` for local only).
+
+Placeholder image slots (replace with your files):
+
+![Dashboard](docs/screenshots/01-dashboard.png)
+
+![SIEM](docs/screenshots/02-siem.png)
+
+![API docs](docs/screenshots/06-api-docs.png)
+
 ## Developing without Docker
 
 ```bash
@@ -101,49 +127,11 @@ CI runs the same commands on every push and on pull requests into `main`.
 
 ## What I'd do next
 
-Because this is a portfolio piece, I wanted to be honest about what's here versus what a production build would need. A running list of known gaps and interesting extensions lives in [`docs/ROADMAP.md`](docs/ROADMAP.md). Highlights:
+This repo is a **portfolio** piece: it shows the architecture, not a full commercial SOC. A detailed backlog — production gaps, research ideas, and **what is already stubbed in config or code** — is in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
-**Detection & SIEM**
-- Sigma rule compiler — parse Sigma YAML into the native detection AST so the community rule packs work out of the box.
-- STIX/TAXII feed ingestion for threat intel, with automatic enrichment of incoming events against known IOCs.
-- WebSocket live alert stream on the dashboard (plumbing exists, UI binding pending).
-- UEBA baseline per user/host — deviation scoring beyond the current IQR+z detector.
-- Kafka/Redpanda event bus option for high-throughput ingest, replacing the current direct-to-Postgres path.
+**Shipped in-tree (v1+ extensions)** include: a **limited Sigma → rule DSL** compiler (`POST /api/v1/siem/sigma/compile`), **STIX indicator ingest** and **IOC enrichment** on event ingest, a **WebSocket** alert stream at `/ws/alerts?token=`, a **per-source UEBA-style** volume summary, **case investigations** CRUD, **Prometheus** metrics at `/metrics` when enabled, an IDS **drift** summary and **explanation proxy** (tree feature importance) on inference, and a **command palette (⌘K)** on the UI.
 
-**Offensive / Recon**
-- Distributed recon with a dedicated worker fleet and rate-limit-aware scheduling.
-- Authenticated web scanning (session replay + JWT bearer support).
-- Nuclei-compatible template runner so the community library works against the same target model.
-- Recon scheduler with diff alerts — notify when a target's attack surface changes between runs.
-
-**ML & Network IDS**
-- Online learning for the IDS model with drift detection, confidence-gated rollout, and shadow inference.
-- Expand training data beyond NSL-KDD — CIC-IDS2017 / UNSW-NB15 / custom PCAP captures.
-- Explainable predictions via SHAP so the analyst sees *why* a flow was flagged.
-- Optional GPU inference path for the heavier models.
-
-**Crypto & Vault**
-- HSM-backed KEKs via PKCS#11 — SoftHSM for local, AWS CloudHSM / GCP Cloud HSM for prod. Currently uses software KEKs.
-- Key rotation flow (wrap-unwrap-rewrap) with zero downtime.
-- Post-quantum KEM hybrid for the key-wrap step (Kyber alongside the existing KDF).
-- S3 / MinIO object-storage backend instead of local filesystem.
-
-**Platform & Operations**
-- Multi-tenant separation and proper RBAC (workspace → team → user) with row-level security in Postgres.
-- SSO via OIDC (Auth0 / Okta / Keycloak) on top of the existing WebAuthn baseline.
-- Case management — group related alerts into investigations, assign owners, track state and SLA.
-- Observability: OpenTelemetry traces, Prometheus metrics, a Grafana dashboard pack.
-- Helm chart + Terraform module for one-command deploys to EKS / GKE / AKS.
-
-**UX & Accessibility**
-- Mobile-responsive variant of the dashboard (currently degrades to tablet only).
-- Full keyboard navigation + screen-reader pass — the animations should never get in the way of operating the app.
-- Command palette (Cmd-K) with cross-module search.
-
-**Research / experimental**
-- LLM-assisted alert triage — local model served via vLLM, no paid-API default.
-- Graph-based attack reconstruction in Neo4j, BFS from high-severity nodes to surface the kill chain.
-- eBPF host-telemetry agent (tiny Go binary, no kernel modules) streaming syscalls + network events into the SIEM module.
+Remaining themes: full Sigma parity, a real TAXII **client** with scheduling, distributed recon workers, OIDC, multi-tenant RLS, HSM, PQC, LLM triage, Neo4j, eBPF, Helm/Terraform, and more — all expanded in the roadmap.
 
 ## Legal and ethical use
 

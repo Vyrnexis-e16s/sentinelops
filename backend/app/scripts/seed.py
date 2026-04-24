@@ -71,9 +71,10 @@ async def _seed_siem(session, user: User) -> None:
                 id=uuid.uuid4(),
                 name=spec["name"],
                 description=spec.get("description", ""),
-                query_dsl_json=spec.get("query", {}),
+                query_dsl_json=spec.get("query_dsl") or spec.get("query", {}),
                 enabled=True,
-                attack_technique_ids_array=spec.get("attack_techniques", []),
+                attack_technique_ids_array=spec.get("attack_technique_ids")
+                or spec.get("attack_techniques", []),
             )
         )
     session.add_all(rules)
