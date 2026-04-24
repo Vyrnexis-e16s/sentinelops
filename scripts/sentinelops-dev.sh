@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# SentinelOps — venvs, requirements, Node/pnpm, typecheck, optional Docker (Linux / Ubuntu, bash 4+)
+# SentinelOps — venvs, Node, typecheck, then Docker Compose (required in MODE=full for DB, Redis, API, UI).
 # Usage:
 #   chmod +x scripts/sentinelops-dev.sh
-#   ./scripts/sentinelops-dev.sh
-#   MODE=local ./scripts/sentinelops-dev.sh      # no docker
-#   MODE=docker ./scripts/sentinelops-dev.sh     # only compose
+#   ./scripts/sentinelops-dev.sh                # full: venv + node + docker compose (Docker required)
+#   MODE=local ./scripts/sentinelops-dev.sh     # venv + node only
+#   MODE=docker ./scripts/sentinelops-dev.sh   # only: docker compose up -d --build
 #   SENTINELOPS_APT_INSTALL=1 ./scripts/sentinelops-dev.sh   # sudo apt install python3.12-venv if needed
 set -euo pipefail
 
@@ -22,9 +22,35 @@ if [[ ! -f "$REPO_ROOT/.env" && -f "$REPO_ROOT/.env.example" ]]; then
   log "Created .env from .env.example"
 fi
 
+# 'docker compose' (v2) or legacy 'docker-compose' (v1)
+docker_compose() {
+  (cd "$REPO_ROOT" || exit 1
+  if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
+    docker compose -f infra/docker/docker-compose.yml "$@"
+  elif command -v docker-compose >/dev/null 2>&1; then
+    docker-compose -f infra/docker/docker-compose.yml "$@"
+  else
+    echo "ERROR: need 'docker compose' or 'docker-compose' on PATH" >&2
+    return 127
+  fi
+  )
+}
+
 if [[ "$MODE" == "docker" ]]; then
-  command -v docker >/dev/null || { logerr "Install Docker: https://docs.docker.com/engine/install/"; exit 1; }
-  (cd "$REPO_ROOT" && docker compose -f infra/docker/docker-compose.yml up -d --build) 2>&1 | tee -a "$LOG_FILE"
+  if ! command -v docker >/dev/null 2>&1; then
+    logerr "Install Docker: https://docs.docker.com/engine/install/"
+    exit 1
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    logerr "Docker engine is not running. Start the Docker service, then retry."
+    exit 1
+  fi
+  docker_compose up -d --build 2>&1 | tee -a "$LOG_FILE"
+  dce="${PIPESTATUS[0]}"
+  if [[ "$dce" -ne 0 ]]; then
+    logerr "docker compose failed (exit $dce). See: $LOG_FILE"
+    exit 1
+  fi
   log "http://localhost:3000  |  http://localhost:8000/docs"
   exit 0
 fi
@@ -104,19 +130,33 @@ else
 fi
 cd "$REPO_ROOT"
 
-if [[ "$MODE" == "full" && "${SKIP_DOCKER:-0}" != "1" ]]; then
-  if command -v docker >/dev/null 2>&1; then
-    log "docker compose up -d --build"
-    docker compose -f "$REPO_ROOT/infra/docker/docker-compose.yml" up -d --build 2>&1 | tee -a "$LOG_FILE"
-    log "UI http://localhost:3000  —  seed: docker compose -f infra/docker/docker-compose.yml exec backend python -m app.scripts.seed"
-  else
-    log "Docker not in PATH; skipped" "WARN"
+if [[ "$MODE" == "full" ]]; then
+  if ! command -v docker >/dev/null 2>&1; then
+    logerr "Full setup requires Docker (Postgres, Redis, API, stack). Start Docker, then re-run. Or: MODE=local for venv/node only."
+    logerr "  https://docs.docker.com/engine/install/"
+    exit 1
   fi
+  if ! docker info >/dev/null 2>&1; then
+    logerr "Docker engine is not running. Start the Docker service, then retry. Or: MODE=local"
+    exit 1
+  fi
+  log "docker compose up -d --build (full stack)"
+  docker_compose up -d --build 2>&1 | tee -a "$LOG_FILE"
+  dce="${PIPESTATUS[0]}"
+  if [[ "$dce" -ne 0 ]]; then
+    logerr "docker compose failed (exit $dce). See: $LOG_FILE"
+    exit 1
+  fi
+  log "UI http://localhost:3000  —  seed: docker compose -f infra/docker/docker-compose.yml exec backend python -m app.scripts.seed"
 fi
 
 log "Finished OK"
 echo ""
-echo "Run locally (two terminals):"
-echo "  backend:  cd $REPO_ROOT/backend && . .venv/bin/activate && uvicorn app.main:app --reload --host 127.0.0.1"
-echo "  frontend: cd $REPO_ROOT/frontend && pnpm dev"
+if [[ "$MODE" == "full" ]]; then
+  echo "Docker stack is up. Venv + dev without Docker: MODE=local ./scripts/sentinelops-dev.sh"
+else
+  echo "Run locally (two terminals):"
+  echo "  backend:  cd $REPO_ROOT/backend && . .venv/bin/activate && uvicorn app.main:app --reload --host 127.0.0.1"
+  echo "  frontend: cd $REPO_ROOT/frontend && pnpm dev"
+fi
 exit 0

@@ -65,7 +65,7 @@ Then:
 Use the scripts in [`scripts/`](scripts/) to create Python **venv**s (`backend/.venv`, `ml/.venv`), install **requirements.txt**, install **Node** dependencies, run **TypeScript** + **ESLint** checks, optionally start **Docker** Compose, and log everything under `logs/`.
 
 - **Windows (PowerShell):** `.\scripts\sentinelops-dev.ps1` — see [`scripts/README.md`](scripts/README.md) for `-Mode` and `-TryUpgradePython`.
-- **Linux / Ubuntu / WSL:** `chmod +x scripts/sentinelops-dev.sh && ./scripts/sentinelops-dev.sh` — use `MODE=local` to skip Docker, `SENTINELOPS_APT_INSTALL=1` on Ubuntu to install Python 3.12 + venv via apt (requires sudo).
+- **Linux / Ubuntu / WSL:** `chmod +x scripts/sentinelops-dev.sh && ./scripts/sentinelops-dev.sh` — the default `MODE=full` needs Docker running; `MODE=local` only prepares venvs/Node without compose. `SENTINELOPS_APT_INSTALL=1` on Ubuntu installs Python 3.12 + venv via apt (requires sudo).
 
 ## Portfolio proof (screenshots)
 

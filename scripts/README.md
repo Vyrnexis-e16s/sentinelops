@@ -4,7 +4,7 @@ Two entry points (pick your OS):
 
 | Platform | Script | Notes |
 |----------|--------|--------|
-| **Windows** (PowerShell 5.1+) | `sentinelops-dev.ps1` | Run from repo root: `.\scripts\sentinelops-dev.ps1` |
+| **Windows** (Windows PowerShell 3+ or PowerShell 7+ `pwsh`) | `sentinelops-dev.ps1` | Run from repo root: `.\scripts\sentinelops-dev.ps1` |
 | **Linux** (Ubuntu / Debian / WSL) | `sentinelops-dev.sh` | `chmod +x scripts/sentinelops-dev.sh` then `./scripts/sentinelops-dev.sh` |
 
 ## What they do
@@ -14,7 +14,7 @@ Two entry points (pick your OS):
 3. Create **`backend/.venv`** and **`ml/.venv`**, upgrade `pip`, install each `requirements.txt`.
 4. Require **Node.js 18+**, then install frontend deps (**pnpm** if installed, else **npm**).
 5. Run **`pnpm run typecheck`** (or `npm run typecheck`) and **`lint`**.
-6. In **full** mode (default): run **`docker compose up -d --build`** for `infra/docker/docker-compose.yml` if Docker is available.
+6. In **full** mode (default): require a running Docker engine, then run **`docker compose up -d --build`** (or `docker-compose`) for `infra/docker/docker-compose.yml` — the database, cache, and containerized app stack are expected to come up this way.
 
 Logs are written under **`logs/sentinelops-dev-*.log`**.
 
@@ -22,10 +22,9 @@ Logs are written under **`logs/sentinelops-dev-*.log`**.
 
 ### Windows (`sentinelops-dev.ps1`)
 
-- **Default / `full`**: local venvs + npm + Docker stack.
-- **`-Mode local`**: no Docker.
+- **Default / `full`**: local venvs + npm, then **Docker Compose** (required; fails if Docker is not installed or the engine is not running).
+- **`-Mode local`**: venvs + npm only — use when you are not using the provided Compose stack.
 - **`-Mode docker`**: only Docker Compose (skips venv/npm).
-- **`-SkipDocker`**: with `full`, skip the compose step.
 - **`-TryUpgradePython`**: if Python is missing or too old, try `winget install Python.Python.3.12` (may require elevation).
 
 ### Linux (`sentinelops-dev.sh`)
@@ -34,10 +33,9 @@ Environment variables:
 
 | Variable | Meaning |
 |----------|---------|
-| `MODE=full` | default: venv + node + docker |
-| `MODE=local` | no docker |
+| `MODE=full` | default: venv + node + **docker compose** (fails if Docker is unavailable) |
+| `MODE=local` | venv + node only (no Docker) |
 | `MODE=docker` | only compose |
-| `SKIP_DOCKER=1` | skip compose in `full` |
 | `SENTINELOPS_APT_INSTALL=1` | run `sudo apt-get install` for Python 3.12 / venv (Ubuntu) |
 
 ## After setup

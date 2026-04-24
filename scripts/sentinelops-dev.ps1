@@ -1,26 +1,42 @@
-#Requires -Version 5.1
 <#
-  SentinelOps — venvs, requirements, Node install, typecheck, optional Docker.
-  Logs: logs/sentinelops-dev-<timestamp>.log
+  SentinelOps — venvs, Node, typecheck, then Docker Compose (required for full stack).
+
+  Runs on Windows PowerShell 3.0+ and PowerShell 7+ (pwsh). No #Requires line so older
+  hosts can at least show a clear error from the version check below.
 
   Usage:
-    .\scripts\sentinelops-dev.ps1
-    .\scripts\sentinelops-dev.ps1 -Mode local      # no docker
-    .\scripts\sentinelops-dev.ps1 -Mode docker     # only docker compose
-    .\scripts\sentinelops-dev.ps1 -TryUpgradePython  # try winget Python 3.12 if <3.11
+    .\scripts\sentinelops-dev.ps1                    # full: venv + npm + docker compose (required)
+    .\scripts\sentinelops-dev.ps1 -Mode local        # venv + npm only (no Docker — for partial work)
+    .\scripts\sentinelops-dev.ps1 -Mode docker       # only: docker compose up -d --build
+    .\scripts\sentinelops-dev.ps1 -TryUpgradePython  # optional winget Python 3.12
+
+  Logs: logs/sentinelops-dev-<timestamp>.log
 #>
 param(
   [ValidateSet("full", "local", "docker")]
   [string] $Mode = "full",
-  [switch] $SkipDocker,
   [switch] $TryUpgradePython
 )
 
 $ErrorActionPreference = "Stop"
+
+# --- PowerShell runtime: 3.0+ (Desktop) and 7+ (Core) both supported ---
+$psv = $PSVersionTable.PSVersion
+if ($psv.Major -lt 3) {
+  Write-Host "ERROR: PowerShell 3.0 or newer is required. You have $psv." -ForegroundColor Red
+  Write-Host "Install PowerShell 7: https://aka.ms/powershell" -ForegroundColor Yellow
+  exit 1
+}
+# Do not use $PSEdition / $psEdition — name collides (case-insensitive) with the read-only automatic variable.
+$shellKind = "Desktop"
+$pe = $PSVersionTable["PSEdition"]
+if ($pe) { $shellKind = $pe }
+
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = (Resolve-Path (Join-Path $ScriptDir "..")).Path
 $LogDir = Join-Path $RepoRoot "logs"
 $LogFile = Join-Path $LogDir ("sentinelops-dev-{0}.log" -f (Get-Date -Format "yyyyMMdd-HHmmss"))
+$ComposeFile = Join-Path $RepoRoot "infra\docker\docker-compose.yml"
 
 function Log([string] $m, [string] $lvl = "INFO") {
   $line = "[{0}] [{1}] {2}" -f (Get-Date -Format o), $lvl, $m
@@ -29,8 +45,40 @@ function Log([string] $m, [string] $lvl = "INFO") {
 }
 function HasCmd($n) { return [bool](Get-Command $n -ErrorAction SilentlyContinue) }
 
+# Invoke "docker compose" (v2) or legacy "docker-compose" (v1); logs stdout/stderr to $LogFile
+function Invoke-DockerCompose {
+  param([string[]] $ComposeArgs)
+  Push-Location $RepoRoot
+  try {
+    if (HasCmd "docker") {
+      $null = & docker compose version 2>&1
+      if ($LASTEXITCODE -eq 0) {
+        $out = & docker compose -f $ComposeFile @ComposeArgs 2>&1
+        $ec = $LASTEXITCODE
+        $out | Tee-Object -FilePath $LogFile -Append
+        return $ec
+      }
+    }
+    if (HasCmd "docker-compose") {
+      $out = & docker-compose -f $ComposeFile @ComposeArgs 2>&1
+      $ec = $LASTEXITCODE
+      $out | Tee-Object -FilePath $LogFile -Append
+      return $ec
+    }
+  } finally {
+    Pop-Location
+  }
+  return 127
+}
+
+function Test-DockerEngine {
+  if (-not (HasCmd "docker")) { return $false }
+  $null = & docker info 2>&1
+  return ($LASTEXITCODE -eq 0)
+}
+
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
-Log "Repository: $RepoRoot | Mode=$Mode | Log=$LogFile"
+Log "PowerShell $psv ($shellKind) | Mode=$Mode | Repo=$RepoRoot | Log=$LogFile"
 
 # .env
 $ex = Join-Path $RepoRoot ".env.example"
@@ -42,9 +90,13 @@ if (-not (Test-Path $ef) -and (Test-Path $ex)) {
 
 # --- docker only ---
 if ($Mode -eq "docker") {
-  if (-not (HasCmd "docker")) { Log "Install Docker Desktop first." "ERROR"; exit 1 }
-  Set-Location $RepoRoot
-  docker compose -f "infra/docker/docker-compose.yml" up -d --build 2>&1 | Tee-Object -FilePath $LogFile -Append
+  if (-not (Test-DockerEngine)) {
+    Log "Docker is not installed or the engine is not running. Start Docker Desktop, then retry." "ERROR"
+    Log "  https://docs.docker.com/desktop/install/windows-install/" "ERROR"
+    exit 1
+  }
+  $code = Invoke-DockerCompose @("up", "-d", "--build")
+  if ($code -ne 0) { Log "docker compose failed (exit $code). See: $LogFile" "ERROR"; exit 1 }
   Log "http://localhost:3000  |  http://localhost:8000/docs"
   exit 0
 }
@@ -130,20 +182,30 @@ if (HasCmd "pnpm") {
 }
 Set-Location $RepoRoot
 
-# --- optional docker ---
-if ($Mode -eq "full" -and -not $SkipDocker) {
-  if (HasCmd "docker") {
-    Log "docker compose up -d --build"
-    docker compose -f "infra/docker/docker-compose.yml" up -d --build 2>&1 | Tee-Object -FilePath $LogFile -Append
-    Log "Open http://localhost:3000 | Seed: docker compose -f infra/docker/docker-compose.yml exec backend python -m app.scripts.seed"
-  } else {
-    Log "Docker not in PATH; skipped" "WARN"
+# --- Full stack: Docker Compose is required (DB, Redis, API, UI, worker) ---
+if ($Mode -eq "full") {
+  if (-not (Test-DockerEngine)) {
+    Log "Full setup requires Docker with a running engine (Postgres, Redis, backend, worker, frontend)." "ERROR"
+    Log "Install and start Docker Desktop, then re-run. Or use -Mode local to skip containers." "ERROR"
+    Log "  https://docs.docker.com/desktop/install/windows-install/" "ERROR"
+    exit 1
   }
+  Log "docker compose up -d --build (required for full application stack)"
+  $dc = Invoke-DockerCompose @("up", "-d", "--build")
+  if ($dc -ne 0) {
+    Log "docker compose failed (exit $dc). See log: $LogFile" "ERROR"
+    exit 1
+  }
+  Log "Stack is up. UI http://localhost:3000  |  API http://localhost:8000/docs"
+  Log "Seed demo data: docker compose -f infra/docker/docker-compose.yml exec backend python -m app.scripts.seed"
 }
 
 Log "Finished OK"
 Write-Host ""
-Write-Host "Run locally:"
-Write-Host "  backend:  cd backend; .\.venv\Scripts\Activate.ps1; uvicorn app.main:app --reload --host 127.0.0.1"
-Write-Host "  frontend: cd frontend; pnpm dev"
+if ($Mode -eq "full") {
+  Write-Host "Docker services are running. For local dev without Docker, use: .\scripts\sentinelops-dev.ps1 -Mode local"
+} else {
+  Write-Host "Run backend:  cd backend; .\.venv\Scripts\Activate.ps1; uvicorn app.main:app --reload --host 127.0.0.1"
+  Write-Host "Run frontend: cd frontend; pnpm dev"
+}
 exit 0
