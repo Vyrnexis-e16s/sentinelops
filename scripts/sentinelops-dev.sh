@@ -5,7 +5,7 @@
 #   ./scripts/sentinelops-dev.sh                # full: venv + node + docker compose (Docker required)
 #   MODE=local ./scripts/sentinelops-dev.sh     # venv + node only
 #   MODE=docker ./scripts/sentinelops-dev.sh   # only: docker compose up -d --build
-#   SENTINELOPS_APT_INSTALL=1 ./scripts/sentinelops-dev.sh   # sudo apt install python3.12-venv if needed
+#   SENTINELOPS_APT_INSTALL=1 ./scripts/sentinelops-dev.sh   # sudo: install/upgrade python3.12+ when missing or <3.11
 set -euo pipefail
 
 MODE="${MODE:-full}"
@@ -69,19 +69,38 @@ find_python() {
   return 1
 }
 
-PYTHON_PATH="$(find_python || true)"
-if [[ -z "$PYTHON_PATH" && "${SENTINELOPS_APT_INSTALL:-0}" == "1" ]] && command -v apt-get >/dev/null; then
-  log "Attempting: sudo apt-get update && sudo apt-get install -y python3.12-venv python3.12"
+apt_install_python() {
+  log "SENTINELOPS_APT_INSTALL=1: apt install/upgrade python3.12, venv, pip…"
   sudo apt-get update
-  sudo apt-get install -y python3.12-venv python3.12
-  PYTHON_PATH="$(find_python || true)"
+  sudo apt-get install -y python3.12-venv python3.12 python3.12-dev python3-pip
+  sudo apt-get install -y --only-upgrade python3.12 python3.12-venv 2>/dev/null || true
+}
+
+PYTHON_PATH="$(find_python 2>/dev/null || true)"
+if [[ -z "$PYTHON_PATH" && "${SENTINELOPS_APT_INSTALL:-0}" == "1" ]] && command -v apt-get >/dev/null 2>&1; then
+  apt_install_python
+  PYTHON_PATH="$(find_python 2>/dev/null || true)"
 fi
 if [[ -z "$PYTHON_PATH" ]]; then
-  logerr "Python 3.11+ required. On Ubuntu: sudo apt install python3.12-venv"
-  logerr "Or re-run with:  SENTINELOPS_APT_INSTALL=1 ./scripts/sentinelops-dev.sh"
+  logerr "Python 3.11+ required (only older python3 may be on PATH). Install 3.12+ or: SENTINELOPS_APT_INSTALL=1 $0 (apt, uses sudo)"
   exit 1
 fi
 log "Python: $($PYTHON_PATH -c 'import sys; print(sys.executable, sys.version)')"
+
+ensure_pip() {
+  local py="$1"
+  log "Checking pip (ensurepip + upgrade) for: $py"
+  if ! "$py" -m pip --version >/dev/null 2>&1; then
+    log "pip not found; running ensurepip…"
+    "$py" -m ensurepip --upgrade 2>&1 | tee -a "$LOG_FILE" || true
+  fi
+  if ! "$py" -m pip --version >/dev/null 2>&1; then
+    logerr "pip is still unavailable for $py. On Debian/Ubuntu: sudo apt install python3-pip python3-venv"
+    exit 1
+  fi
+  "$py" -m pip install --upgrade pip setuptools wheel 2>&1 | tee -a "$LOG_FILE" || log "pip upgrade on base Python (non-fatal, venv will retry)" "WARN"
+}
+ensure_pip "$PYTHON_PATH"
 
 # --- backend venv ---
 BK="$REPO_ROOT/backend"

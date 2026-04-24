@@ -8,14 +8,16 @@
     .\scripts\sentinelops-dev.ps1                    # full: venv + npm + docker compose (required)
     .\scripts\sentinelops-dev.ps1 -Mode local        # venv + npm only (no Docker — for partial work)
     .\scripts\sentinelops-dev.ps1 -Mode docker       # only: docker compose up -d --build
-    .\scripts\sentinelops-dev.ps1 -TryUpgradePython  # optional winget Python 3.12
+    .\scripts\sentinelops-dev.ps1 -TryUpgradePython   # also: winget upgrade for installed Python
+    .\scripts\sentinelops-dev.ps1 -NoWingetPython     # skip auto winget install/upgrade of Python
 
   Logs: logs/sentinelops-dev-<timestamp>.log
 #>
 param(
   [ValidateSet("full", "local", "docker")]
   [string] $Mode = "full",
-  [switch] $TryUpgradePython
+  [switch] $TryUpgradePython,
+  [switch] $NoWingetPython
 )
 
 $ErrorActionPreference = "Stop"
@@ -44,6 +46,25 @@ function Log([string] $m, [string] $lvl = "INFO") {
   if (Test-Path $LogDir) { Add-Content -LiteralPath $LogFile -Value $line }
 }
 function HasCmd($n) { return [bool](Get-Command $n -ErrorAction SilentlyContinue) }
+
+# Re-read machine + user PATH (needed after winget install in same session)
+function Sync-MachinePath {
+  $m = [Environment]::GetEnvironmentVariable("Path", "Machine")
+  $u = [Environment]::GetEnvironmentVariable("Path", "User")
+  if ($m -or $u) { $env:Path = "$m;$u" }
+}
+
+function Update-PipForBasePython([string] $Interpreter) {
+  Log "ensurepip + pip install --upgrade (base interpreter): $Interpreter"
+  $oldEa = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  $null = & $Interpreter -m ensurepip --upgrade 2>&1 | Tee-Object -FilePath $LogFile -Append
+  $ErrorActionPreference = $oldEa
+  $pout = & $Interpreter -m pip install --upgrade pip setuptools wheel 2>&1
+  $pec = $LASTEXITCODE
+  $pout | Tee-Object -FilePath $LogFile -Append
+  if ($pec -ne 0) { Log "pip install --upgrade on base Python exited $pec (continuing; venv will retry)" "WARN" }
+}
 
 # Invoke "docker compose" (v2) or legacy "docker-compose" (v1); logs stdout/stderr to $LogFile
 function Invoke-DockerCompose {
@@ -105,11 +126,11 @@ if ($Mode -eq "docker") {
 function Get-PythonPath {
   $code = "import sys; assert sys.version_info>=(3,11); print(sys.executable)"
   if (HasCmd "py") {
+    $out = & py -3.13 -c $code 2>$null; if ($LASTEXITCODE -eq 0 -and $out) { return $out.Trim() }
     $out = & py -3.12 -c $code 2>$null; if ($LASTEXITCODE -eq 0 -and $out) { return $out.Trim() }
     $out = & py -3.11 -c $code 2>$null; if ($LASTEXITCODE -eq 0 -and $out) { return $out.Trim() }
-    $out = & py -3.13 -c $code 2>$null; if ($LASTEXITCODE -eq 0 -and $out) { return $out.Trim() }
   }
-  foreach ($c in @("python3.12", "python3.11", "python3", "python")) {
+  foreach ($c in @("python3.13", "python3.12", "python3.11", "python3", "python")) {
     if (-not (HasCmd $c)) { continue }
     $out = & $c -c $code 2>$null
     if ($LASTEXITCODE -eq 0 -and $out) { return $out.Trim() }
@@ -118,17 +139,42 @@ function Get-PythonPath {
 }
 
 $PythonPath = Get-PythonPath
-if (-not $PythonPath -and $TryUpgradePython -and (HasCmd "winget")) {
-  Log "Trying winget: Python.Python.3.12" "WARN"
+if ($TryUpgradePython -and (HasCmd "winget") -and -not $NoWingetPython -and $PythonPath) {
+  Log "TryUpgradePython: winget upgrade (Python 3.13, then 3.12 if needed)"
+  $ErrorActionPreference = "Continue"
+  $null = winget upgrade -e --id Python.Python.3.13 --accept-source-agreements --accept-package-agreements 2>&1 | Tee-Object -FilePath $LogFile -Append
+  if ($LASTEXITCODE -ne 0) {
+    $null = winget upgrade -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements 2>&1 | Tee-Object -FilePath $LogFile -Append
+  }
+  $ErrorActionPreference = "Stop"
+  Sync-MachinePath
+  $PythonPath = Get-PythonPath
+}
+if (-not $PythonPath -and (HasCmd "winget") -and -not $NoWingetPython) {
+  Log "Python 3.11+ not found; installing Python 3.12 via winget…"
+  $ErrorActionPreference = "Continue"
   winget install -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements 2>&1 | Tee-Object -FilePath $LogFile -Append
+  $ErrorActionPreference = "Stop"
+  Sync-MachinePath
+  $PythonPath = Get-PythonPath
+}
+if (-not $PythonPath -and (HasCmd "winget") -and -not $NoWingetPython) {
+  Log "winget: trying Python 3.13…" "WARN"
+  $ErrorActionPreference = "Continue"
+  winget install -e --id Python.Python.3.13 --accept-source-agreements --accept-package-agreements 2>&1 | Tee-Object -FilePath $LogFile -Append
+  $ErrorActionPreference = "Stop"
+  Sync-MachinePath
   $PythonPath = Get-PythonPath
 }
 if (-not $PythonPath) {
-  Log "Need Python 3.11+ on PATH (use py launcher, or install from python.org). Then re-run." "ERROR"
-  Log "  winget install Python.Python.3.12" "ERROR"
+  Log "Need Python 3.11+ on PATH. Install from https://www.python.org/downloads/ or: winget install Python.Python.3.12" "ERROR"
+  Log "  Use -NoWingetPython to skip automatic winget install." "ERROR"
   exit 1
 }
-Log "Python: $(& $PythonPath -c "import sys; print(sys.version)" 2>&1 | Out-String).Trim()"
+Log "Python: $(& $PythonPath -c "import sys; print(sys.executable, sys.version)" 2>&1 | Out-String).Trim()"
+
+# pip on base interpreter (then venvs get a fresh copy)
+Update-PipForBasePython -Interpreter $PythonPath
 
 # --- venv: backend ---
 $bd = Join-Path $RepoRoot "backend"
