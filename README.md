@@ -158,17 +158,18 @@ If any of the above is unclear, stop and get advice before running the tool — 
 
 If you find a vulnerability, please see [SECURITY.md](SECURITY.md) for disclosure. Don't open a public issue.
 
-### Dependency audits (frontend / npm)
+### Dependency audits (frontend / pnpm)
 
-From the repo root, check and apply **Node** dependency fixes (visible in CI and local `npm install` output):
+The frontend is managed with **pnpm** (see `packageManager` in `frontend/package.json`); CI uses the same. PostCSS nested under `next` is **pinned to a safe version** via `overrides` in `package.json` — if `npm audit` or `pnpm audit` still flags PostCSS, remove `node_modules` and the local lock you use, then reinstall.
 
 ```bash
 cd frontend
-npm audit                 # list known issues in the dependency tree
-npm audit fix             # apply non-breaking semver-safe updates first (preferred)
+corepack enable
+pnpm install
+pnpm audit
 ```
 
-`npm audit fix --force` may pull **major** upgrades and **can break** the Next.js app or eslint config — only use it in a branch, then run `npm run typecheck`, `npm run lint`, and `npm run build` before merging.
+Avoid `npm audit fix --force` on this app; it can suggest wild downgrades. Prefer editing `package.json` (and the nested `overrides` for `next` → `postcss`) and running `pnpm install`, then `pnpm typecheck`, `pnpm lint`, and `pnpm build`.
 
 Optional (Python backend, same machine):
 

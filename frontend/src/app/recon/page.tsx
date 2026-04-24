@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import type { ElementType } from "react";
 import { motion } from "framer-motion";
 import { Crosshair, Globe2, Plug, Plus } from "lucide-react";
 import SectionHeader from "@/components/shared/SectionHeader";
@@ -44,7 +45,7 @@ export default function ReconPage() {
   );
 }
 
-function Action({ label, icon: Icon }: { label: string; icon: React.ElementType }) {
+function Action({ label, icon: Icon }: { label: string; icon: ElementType }) {
   return (
     <button className="text-xs px-3 py-2 rounded-md border border-border/60 hover:border-accent/60 inline-flex items-center gap-1.5">
       <Icon className="h-3.5 w-3.5 text-accent" />

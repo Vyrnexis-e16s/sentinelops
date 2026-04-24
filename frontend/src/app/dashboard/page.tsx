@@ -1,5 +1,6 @@
 "use client";
 
+import type { ElementType } from "react";
 import dynamic from "next/dynamic";
 import { motion } from "framer-motion";
 import { Activity, Crosshair, Lock, Radar, Shield } from "lucide-react";
@@ -66,7 +67,7 @@ function ModuleTile({
   body,
   href
 }: {
-  icon: React.ElementType;
+  icon: ElementType;
   title: string;
   body: string;
   href: string;
