@@ -431,7 +431,9 @@ function FindingsCard({
 }) {
   const [scope, setScope] = useState<"all" | "watch">(watchJobId ? "watch" : "all");
   useEffect(() => {
-    if (watchJobId) setScope("watch");
+    if (!watchJobId) return;
+    const t = runDeferred(() => setScope("watch"));
+    return () => clearTimeout(t);
   }, [watchJobId]);
   const list =
     scope === "watch" && watchJobId
