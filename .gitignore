@@ -65,7 +65,8 @@ docker-volumes/
 
 # Logs
 *.log
-logs/
+logs/*
+!logs/.gitkeep
 
 # OS
 .DS_Store

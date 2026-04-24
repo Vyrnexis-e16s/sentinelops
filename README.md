@@ -60,6 +60,13 @@ Then:
 
 `make seed` loads a few weeks of fake SIEM events and a handful of known-bad CVEs so the dashboard isn't empty.
 
+### Automated setup (Windows & Linux)
+
+Use the scripts in [`scripts/`](scripts/) to create Python **venv**s (`backend/.venv`, `ml/.venv`), install **requirements.txt**, install **Node** dependencies, run **TypeScript** + **ESLint** checks, optionally start **Docker** Compose, and log everything under `logs/`.
+
+- **Windows (PowerShell):** `.\scripts\sentinelops-dev.ps1` — see [`scripts/README.md`](scripts/README.md) for `-Mode` and `-TryUpgradePython`.
+- **Linux / Ubuntu / WSL:** `chmod +x scripts/sentinelops-dev.sh && ./scripts/sentinelops-dev.sh` — use `MODE=local` to skip Docker, `SENTINELOPS_APT_INSTALL=1` on Ubuntu to install Python 3.12 + venv via apt (requires sudo).
+
 ## Portfolio proof (screenshots)
 
 Add PNGs under [`docs/screenshots/`](docs/screenshots/) and reference them here. Suggested shots — capture **after** `make up` and `make seed`, signed in (or with a dev JWT) so the API-backed panels are populated.
