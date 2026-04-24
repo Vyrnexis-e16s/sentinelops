@@ -27,7 +27,6 @@ yarn-error.log*
 .pnpm-debug.log*
 pnpm-lock.yaml.backup
 *.tsbuildinfo
-frontend/package-lock.json
 
 # Env / secrets
 .env
