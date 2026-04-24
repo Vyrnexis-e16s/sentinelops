@@ -41,13 +41,12 @@ async def create_target(
     user: User = Depends(current_user),
     audit: AuditService = Depends(audit_logger),
 ) -> TargetOut:
-    existing = await db.execute(
+    res = await db.execute(
         select(Target).where(Target.owner_id == user.id, Target.value == payload.value)
     )
-    if existing.scalar_one_or_none() is not None:
-        # Idempotent: return existing.
-        t = existing.scalar_one()
-        return TargetOut.model_validate(t)
+    existing = res.scalars().first()
+    if existing is not None:
+        return TargetOut.model_validate(existing)
 
     target = Target(
         id=uuid.uuid4(),

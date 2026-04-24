@@ -61,6 +61,33 @@ export type Alert = {
 
 export type Paginated<T> = { items: T[]; page: number; size: number; total: number };
 
+export type ReconTarget = {
+  id: string;
+  kind: string;
+  value: string;
+  created_at: string;
+  owner_id: string;
+};
+
+export type ReconJob = {
+  id: string;
+  target_id: string;
+  kind: string;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  result_json: Record<string, unknown>;
+};
+
+export type ReconFinding = {
+  id: string;
+  job_id: string;
+  severity: string;
+  title: string;
+  description: string;
+  evidence_json: Record<string, unknown>;
+};
+
 export type Inference = {
   id: string;
   timestamp: string;
