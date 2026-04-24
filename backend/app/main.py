@@ -96,7 +96,11 @@ def create_app() -> FastAPI:
             r = await init_redis()
             await r.ping()
         except Exception as exc:  # pragma: no cover
-            return JSONResponse({"status": "degraded", "error": str(exc)}, status_code=503)
+            log.warning("ready_redis_failed", error=str(exc))
+            return JSONResponse(
+                {"status": "degraded", "error": "redis_unavailable"},
+                status_code=503,
+            )
         return JSONResponse({"status": "ready"})
 
     if settings.expose_prometheus or settings.is_production:

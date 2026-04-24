@@ -8,7 +8,9 @@ import yaml
 
 from app.modules.siem.schemas import RuleCondition, RuleDSL, Severity
 
-_MOD = re.compile(r"^([^|]+)(?:\|([a-z0-9_]+))?$", re.I)
+# Bound Sigma condition strings to avoid ReDoS / pathological input (CodeQL: polynomial regex on uncontrolled data).
+_MAX_CONDITION_LEN = 4096
+_MAX_KEY_LEN = 512
 
 
 def _field_name(sigma_name: str, default_prefix: str) -> str:
@@ -18,6 +20,25 @@ def _field_name(sigma_name: str, default_prefix: str) -> str:
     return f"{default_prefix}.{n}"
 
 
+def _parse_sigma_key(k: str) -> tuple[str, str] | None:
+    """Parse ``field|modifier`` without applying regex to full user-controlled keys."""
+    k0 = k.strip()
+    if not k0 or len(k0) > _MAX_KEY_LEN:
+        return None
+    if "|" in k0:
+        base, mod = k0.rsplit("|", 1)
+        base, mod = base.strip(), mod.strip().lower()
+        if not mod:
+            mod = ""
+        elif not all(c.isascii() and (c.isalnum() or c == "_") for c in mod):
+            return None
+    else:
+        base, mod = k0, ""
+    if not base:
+        return None
+    return base, mod
+
+
 def _map_selection_block(
     block: Any, default_prefix: str
 ) -> list[RuleCondition]:
@@ -25,10 +46,10 @@ def _map_selection_block(
         raise ValueError("selection must be a mapping of field|modifier: value")
     out: list[RuleCondition] = []
     for k, v in block.items():
-        m = _MOD.match(k.strip())
-        if not m:
+        pk = _parse_sigma_key(k)
+        if not pk:
             continue
-        base, mod = m.group(1), (m.group(2) or "").lower()
+        base, mod = pk
         field = _field_name(base, default_prefix)
         if mod in ("", "eq", "equals"):
             out.append(RuleCondition(field=field, op="eq", value=v))
@@ -49,16 +70,50 @@ def _map_selection_block(
     return out
 
 
+def _split_condition_by_and(expr: str) -> list[str]:
+    """Split on `` and `` (case-insensitive) without regex over arbitrary-length input."""
+    e = expr
+    n = len(e)
+    if n == 0:
+        return []
+    le = e.lower()
+    sep = " and "
+    L = len(sep)
+    parts: list[str] = []
+    start = 0
+    i = 0
+    while i <= n - L:
+        if le[i : i + L] == sep:
+            parts.append(e[start:i].strip())
+            start = i + L
+            i = start
+            continue
+        i += 1
+    parts.append(e[start:].strip())
+    return [p for p in parts if p]
+
+
 def _parse_condition(expr: str, blocks: dict[str, list[RuleCondition]]) -> RuleDSL:
-    e = re.sub(r"\s+", " ", str(expr).strip())
-    m1 = re.match(r"^1\s+of\s+([a-z0-9_,\s*]+?)$", e, re.I)
-    if m1:
-        names = [x.strip() for x in m1.group(1).split(",") if x.strip() and not x.startswith("filter")]
+    raw = str(expr)
+    if len(raw) > _MAX_CONDITION_LEN:
+        raise ValueError("detection.condition exceeds maximum length")
+    e = " ".join(raw.split())
+    e_low = e.lower()
+
+    if e_low.startswith("1 of "):
+        rest = e[5:].strip()
+        names: list[str] = []
+        for part in rest.split(",") if rest else []:
+            x = part.strip()
+            if not x or x.lower().startswith("filter"):
+                continue
+            x = x.replace("*", "")
+            names.append(x)
         if not names:
             raise ValueError("empty 1 of")
         any_of: list[RuleCondition] = []
         for n in names:
-            n = n.replace("*", "")
+            n = n.rstrip("*")
             matches = [k for k in blocks if k.startswith(n.rstrip("*"))]
             for blk_name in (matches or ([n] if n in blocks else [])):
                 any_of.extend(blocks.get(blk_name, []))
@@ -70,7 +125,7 @@ def _parse_condition(expr: str, blocks: dict[str, list[RuleCondition]]) -> RuleD
         return RuleDSL(all_of=blocks[e], score=5.0, severity="medium")
 
     if " and " in e.lower():
-        parts = re.split(r"\s+and\s+", e, flags=re.IGNORECASE)
+        parts = _split_condition_by_and(e)
         merged: list[RuleCondition] = []
         for p in parts:
             p = p.strip()
