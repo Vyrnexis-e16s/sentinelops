@@ -45,39 +45,37 @@ export default function SiemPage() {
     };
   }, []);
 
-  const displayAlerts =
-    alerts.length > 0
-      ? alerts
-      : [
-          {
-            id: "a-0000",
-            event_id: "",
-            rule_id: null,
-            rule_name: "dns.tunneling",
-            score: 0.74,
-            status: "ack" as const,
-            created_at: new Date().toISOString(),
-            alert_kind: "detection"
-          },
-          {
-            id: "a-0001",
-            event_id: "",
-            rule_id: null,
-            rule_name: "threat.intel.ioc",
-            score: 0.9,
-            status: "new" as const,
-            created_at: new Date().toISOString(),
-            alert_kind: "threat_intel"
-          }
-        ];
+  const fallbackAlerts: Alert[] = [
+    {
+      id: "00000000-0000-0000-0000-0000000000a0",
+      event_id: "00000000-0000-0000-0000-0000000000e0",
+      rule_id: null,
+      rule_name: "dns.tunneling",
+      score: 0.74,
+      status: "ack",
+      created_at: new Date().toISOString(),
+      alert_kind: "detection"
+    },
+    {
+      id: "00000000-0000-0000-0000-0000000000a1",
+      event_id: "00000000-0000-0000-0000-0000000000e1",
+      rule_id: null,
+      rule_name: "threat.intel.ioc",
+      score: 0.9,
+      status: "new",
+      created_at: new Date().toISOString(),
+      alert_kind: "threat_intel"
+    }
+  ];
 
-  const displayRules =
-    rules.length > 0
-      ? rules
-      : [
-          { id: "1", name: "ssh.bruteforce", attack_technique_ids_array: ["T1110"], enabled: true },
-          { id: "2", name: "ps.encoded_command", attack_technique_ids_array: ["T1059.001"], enabled: true }
-        ];
+  const displayAlerts = alerts.length > 0 ? alerts : fallbackAlerts;
+
+  const fallbackRules: Rule[] = [
+    { id: "1", name: "ssh.bruteforce", attack_technique_ids_array: ["T1110"], enabled: true },
+    { id: "2", name: "ps.encoded_command", attack_technique_ids_array: ["T1059.001"], enabled: true }
+  ];
+
+  const displayRules = rules.length > 0 ? rules : fallbackRules;
 
   return (
     <div className="space-y-6">
@@ -124,7 +122,7 @@ export default function SiemPage() {
             </tr>
           </thead>
           <tbody>
-            {displayAlerts.map((a, i) => (
+            {displayAlerts.map((a: Alert, i: number) => (
               <motion.tr
                 key={a.id}
                 initial={{ opacity: 0 }}
@@ -154,7 +152,7 @@ export default function SiemPage() {
         <div className="glass rounded-xl p-4 lg:col-span-2">
           <div className="text-sm font-semibold mb-2">Detection rules</div>
           <ul className="text-sm divide-y divide-border/40">
-            {displayRules.map((r) => (
+            {displayRules.map((r: Rule) => (
               <li key={r.id} className="py-2 flex items-center gap-3">
                 <span className={`h-2 w-2 rounded-full ${r.enabled ? "bg-ok" : "bg-muted"}`} />
                 <span className="font-mono text-xs">{r.name}</span>
@@ -198,7 +196,7 @@ function ScoreBar({ value }: { value: number }) {
       <div className="w-24 h-1.5 rounded-full bg-border/40 overflow-hidden">
         <div
           className="h-full bg-gradient-to-r from-accent to-accent2"
-          style={{ width: `${Math.min(1, value) * 100}%` }}
+          style={{ width: `${Math.min(100, (value / 10) * 100)}%` }}
         />
       </div>
       <span className="font-mono text-xs">{value.toFixed(2)}</span>

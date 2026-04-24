@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 
 export type Theme = "tactical" | "aurora";
 
@@ -14,7 +14,7 @@ const Ctx = createContext<ThemeCtx | null>(null);
 
 const STORAGE_KEY = "sentinelops:theme";
 
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
+export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<Theme>("tactical");
 
   useEffect(() => {
@@ -32,7 +32,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, [theme]);
 
   const setTheme = (t: Theme) => setThemeState(t);
-  const toggle = () => setThemeState((t) => (t === "tactical" ? "aurora" : "tactical"));
+  const toggle = () => setThemeState((t: Theme) => (t === "tactical" ? "aurora" : "tactical"));
 
   return <Ctx.Provider value={{ theme, setTheme, toggle }}>{children}</Ctx.Provider>;
 }

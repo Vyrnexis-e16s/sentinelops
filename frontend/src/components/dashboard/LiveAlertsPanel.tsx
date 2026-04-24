@@ -70,7 +70,7 @@ export function LiveAlertsPanel() {
       };
     }
 
-    let ws: WebSocket;
+    let ws: WebSocket | undefined;
     try {
       ws = new WebSocket(getAlertStreamUrl(token));
     } catch {
@@ -94,7 +94,7 @@ export function LiveAlertsPanel() {
         const severity =
           j.severity === "high" || j.severity === "critical" ? "high" : "medium";
         const detail = `live · score ${typeof j.score === "number" ? j.score.toFixed(2) : "—"}`;
-        setRows((prev) => [{ id, title, severity, detail }, ...prev].slice(0, 8));
+        setRows((prev: Live[]) => [{ id, title, severity, detail }, ...prev].slice(0, 8));
       } catch {
         /* ignore */
       }
@@ -104,7 +104,7 @@ export function LiveAlertsPanel() {
 
     return () => {
       cancelled = true;
-      ws.close();
+      ws?.close();
     };
   }, []);
 
@@ -120,7 +120,7 @@ export function LiveAlertsPanel() {
       </div>
       {wsNote && <div className="text-[10px] text-muted mb-2">{wsNote}</div>}
       <ul className="space-y-2 text-sm">
-        {rows.map((a) => (
+        {rows.map((a: Live) => (
           <li
             key={a.id + a.detail}
             className="flex items-start gap-3 rounded-md border border-border/50 px-3 py-2 hover:border-accent/50 transition-colors"

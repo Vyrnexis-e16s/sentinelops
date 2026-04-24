@@ -1,6 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent
+} from "react";
 import { useRouter } from "next/navigation";
 import { Command } from "cmdk";
 import {
@@ -28,7 +34,7 @@ export function CommandPalette() {
   const down = useCallback((e: KeyboardEvent) => {
     if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
-      setOpen((o) => !o);
+      setOpen((o: boolean) => !o);
     }
   }, []);
   useEffect(() => {
@@ -44,11 +50,11 @@ export function CommandPalette() {
           role="button"
           tabIndex={0}
           onClick={() => setOpen(false)}
-          onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
+          onKeyDown={(e: KeyboardEvent) => e.key === "Escape" && setOpen(false)}
         >
           <div
             className="w-full max-w-lg glass rounded-xl border border-border/70 shadow-2xl overflow-hidden"
-            onClick={(e) => e.stopPropagation()}
+            onClick={(e: MouseEvent) => e.stopPropagation()}
             role="presentation"
           >
             <Command

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
 import "@/styles/globals.css";
 import { ThemeProvider } from "@/lib/theme";
 import Sidebar from "@/components/shared/Sidebar";
@@ -12,7 +13,7 @@ export const metadata: Metadata = {
   icons: { icon: "/favicon.svg" }
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" suppressHydrationWarning>
       <body>
