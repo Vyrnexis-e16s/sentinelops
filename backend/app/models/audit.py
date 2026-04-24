@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import JSON, LargeBinary, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models import Base
+from app.core.orm_base import Base
 
 
 class AuditLog(Base):

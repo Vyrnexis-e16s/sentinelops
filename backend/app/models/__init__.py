@@ -1,46 +1,29 @@
-"""SQLAlchemy declarative base + re-export of all shared models.
+"""Aggregated re-export of every SQLAlchemy model.
 
-Module-specific models live under their respective modules but are imported here
-so Alembic's metadata picks up every table.
+Alembic's ``target_metadata = Base.metadata`` only sees tables whose classes
+have been imported at least once. This module imports every model so Alembic
+always has the full metadata when it is loaded. Individual modules should
+import ``Base`` directly from :mod:`app.models.base` to avoid circular-import
+issues with this aggregator.
 """
 from __future__ import annotations
 
-import uuid
-from datetime import datetime
-from typing import Any
+from sqlalchemy.orm import mapped_column
 
-from sqlalchemy import DateTime
-from sqlalchemy.orm import DeclarativeBase, mapped_column
-
-# All concrete models are imported below so they register with Base.metadata
-# regardless of which module imports `Base`.
-
-
-class Base(DeclarativeBase):
-    """Project-wide declarative base."""
-
-    type_annotation_map: dict[Any, Any] = {  # noqa: RUF012
-        datetime: DateTime(timezone=True),
-        uuid.UUID: __import__("sqlalchemy").Uuid(as_uuid=True),
-    }
-
-
-# ------- shared --------
-from app.models.audit import AuditLog  # noqa: E402,F401
-from app.models.user import User  # noqa: E402,F401
-from app.models.webauthn import WebAuthnCredential  # noqa: E402,F401
-
-# ------- module models --------
-from app.modules.ids.models import Inference  # noqa: E402,F401
-from app.modules.recon.models import Finding, ReconJob, Target  # noqa: E402,F401
-from app.modules.siem.models import (  # noqa: E402,F401
+from app.core.orm_base import Base
+from app.models.audit import AuditLog
+from app.models.user import User
+from app.models.webauthn import WebAuthnCredential
+from app.modules.ids.models import Inference
+from app.modules.recon.models import Finding, ReconJob, Target
+from app.modules.siem.models import (
     Alert,
     DetectionRule,
     Event,
     Investigation,
     ThreatIoc,
 )
-from app.modules.vault.models import VaultAccessGrant, VaultObject  # noqa: E402,F401
+from app.modules.vault.models import VaultAccessGrant, VaultObject
 
 __all__ = [
     "Base",

@@ -15,7 +15,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models import Base
+from app.core.orm_base import Base
 
 
 def _mutable_list() -> list[str]:

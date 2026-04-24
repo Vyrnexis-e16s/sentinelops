@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import JSON, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models import Base
+from app.core.orm_base import Base
 
 
 def _dict() -> dict[str, Any]:

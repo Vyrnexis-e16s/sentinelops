@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import JSON, Float, String
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.models import Base
+from app.core.orm_base import Base
 
 
 def _empty_features() -> dict[str, Any]:

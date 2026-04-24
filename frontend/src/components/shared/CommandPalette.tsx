@@ -21,6 +21,8 @@ const routes = [
   { href: "/vault", label: "Vault", icon: Lock, kw: "files encryption" }
 ];
 
+export const PALETTE_OPEN_EVENT = "sentinelops:palette-open";
+
 export function CommandPalette() {
   const [open, setOpen] = useState(false);
   const router = useRouter();
@@ -34,7 +36,12 @@ export function CommandPalette() {
   }, []);
   useEffect(() => {
     document.addEventListener("keydown", down);
-    return () => document.removeEventListener("keydown", down);
+    const onOpen = () => setOpen(true);
+    window.addEventListener(PALETTE_OPEN_EVENT, onOpen);
+    return () => {
+      document.removeEventListener("keydown", down);
+      window.removeEventListener(PALETTE_OPEN_EVENT, onOpen);
+    };
   }, [down]);
 
   return (

@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from sqlalchemy import BigInteger, ForeignKey, LargeBinary, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.models import Base
+from app.core.orm_base import Base
 
 
 class WebAuthnCredential(Base):
