@@ -160,16 +160,19 @@ If you find a vulnerability, please see [SECURITY.md](SECURITY.md) for disclosur
 
 ### Dependency audits (frontend / pnpm)
 
-The frontend is managed with **pnpm** (see `packageManager` in `frontend/package.json`); CI uses the same. PostCSS nested under `next` is **pinned to a safe version** via `overrides` in `package.json` — if `npm audit` or `pnpm audit` still flags PostCSS, remove `node_modules` and the local lock you use, then reinstall.
+The frontend is managed with **pnpm** (see `packageManager` in `frontend/package.json`); CI uses the same. **`package.json` `overrides`** pin **one** `react` / `react-dom` 19, matching `@types/*`, and safe **PostCSS** (including under `next`). That avoids duplicate `react@18` from **cmdk**’s Radix tree and the resulting `ERESOLVE` / peer warnings. If you still see them or stale audits, **delete** `node_modules` and the lock you use, then reinstall.
 
 ```bash
 cd frontend
+# clean tree (if upgrading or ERESOLVE persisted):
+# rm -rf node_modules
+# (optional) del package-lock.json  # or remove pnpm-lock.yaml when switching managers
 corepack enable
 pnpm install
 pnpm audit
 ```
 
-Avoid `npm audit fix --force` on this app; it can suggest wild downgrades. Prefer editing `package.json` (and the nested `overrides` for `next` → `postcss`) and running `pnpm install`, then `pnpm typecheck`, `pnpm lint`, and `pnpm build`.
+Avoid `npm audit fix --force` on this app; it can suggest wild downgrades. Prefer editing `package.json` (including the `overrides` block) and running `pnpm install`, then `pnpm typecheck`, `pnpm lint`, and `pnpm build`.
 
 Optional (Python backend, same machine):
 
