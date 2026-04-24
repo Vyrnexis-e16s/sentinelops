@@ -1,6 +1,13 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useLayoutEffect,
+  useSyncExternalStore,
+  type ReactNode
+} from "react";
 
 export type Theme = "tactical" | "aurora";
 
@@ -13,26 +20,56 @@ type ThemeCtx = {
 const Ctx = createContext<ThemeCtx | null>(null);
 
 const STORAGE_KEY = "sentinelops:theme";
+const THEME_EVENT = "sentinelops:theme-changed";
+
+function getSnapshot(): Theme {
+  if (typeof window === "undefined") return "tactical";
+  try {
+    return (localStorage.getItem(STORAGE_KEY) as Theme | null) || "tactical";
+  } catch {
+    return "tactical";
+  }
+}
+
+function getServerSnapshot(): Theme {
+  return "tactical";
+}
+
+function subscribe(onStoreChange: () => void) {
+  if (typeof window === "undefined") {
+    return () => {};
+  }
+  const onStorage = (e: StorageEvent) => {
+    if (e.key === STORAGE_KEY) onStoreChange();
+  };
+  const onLocal = () => onStoreChange();
+  window.addEventListener("storage", onStorage);
+  window.addEventListener(THEME_EVENT, onLocal);
+  return () => {
+    window.removeEventListener("storage", onStorage);
+    window.removeEventListener(THEME_EVENT, onLocal);
+  };
+}
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setThemeState] = useState<Theme>("tactical");
+  const theme = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
+
+  const setTheme = useCallback((t: Theme) => {
     try {
-      const stored = (localStorage.getItem(STORAGE_KEY) as Theme | null) || "tactical";
-      setThemeState(stored);
+      localStorage.setItem(STORAGE_KEY, t);
+      window.dispatchEvent(new Event(THEME_EVENT));
     } catch {
-      // SSR / no storage — fine.
+      // No storage
     }
   }, []);
 
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    try { localStorage.setItem(STORAGE_KEY, theme); } catch {}
-  }, [theme]);
-
-  const setTheme = (t: Theme) => setThemeState(t);
-  const toggle = () => setThemeState((t: Theme) => (t === "tactical" ? "aurora" : "tactical"));
+  const toggle = useCallback(() => {
+    setTheme(theme === "tactical" ? "aurora" : "tactical");
+  }, [setTheme, theme]);
 
   return <Ctx.Provider value={{ theme, setTheme, toggle }}>{children}</Ctx.Provider>;
 }

@@ -15,10 +15,15 @@ const sevColor = (s: string) =>
       ? "text-warn"
       : "text-ok";
 
+const NO_TOKEN_MSG =
+  "Set JWT in localStorage sentinelops_access_token for live WebSocket alerts.";
+
 export function LiveAlertsPanel() {
   const [rows, setRows] = useState<Live[]>([]);
   const [mode, setMode] = useState<"sample" | "api" | "live">("sample");
   const [wsNote, setWsNote] = useState<string | null>(null);
+  const hasToken = Boolean(getAccessToken());
+  const tokenHint = !hasToken ? NO_TOKEN_MSG : null;
 
   useEffect(() => {
     const sample: Live[] = [
@@ -64,7 +69,6 @@ export function LiveAlertsPanel() {
 
     const token = getAccessToken();
     if (!token) {
-      setWsNote("Set JWT in localStorage sentinelops_access_token for live WebSocket alerts.");
       return () => {
         cancelled = true;
       };
@@ -74,7 +78,9 @@ export function LiveAlertsPanel() {
     try {
       ws = new WebSocket(getAlertStreamUrl(token));
     } catch {
-      setWsNote("Could not open WebSocket URL.");
+      queueMicrotask(() => {
+        if (!cancelled) setWsNote("Could not open WebSocket URL.");
+      });
       return () => {
         cancelled = true;
       };
@@ -118,7 +124,9 @@ export function LiveAlertsPanel() {
           {mode === "live" ? "live · ws" : mode === "api" ? "rest" : "sample"}
         </div>
       </div>
-      {wsNote && <div className="text-[10px] text-muted mb-2">{wsNote}</div>}
+      {(tokenHint || wsNote) && (
+        <div className="text-[10px] text-muted mb-2">{tokenHint ?? wsNote}</div>
+      )}
       <ul className="space-y-2 text-sm">
         {rows.map((a: Live) => (
           <li

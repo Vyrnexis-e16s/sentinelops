@@ -76,7 +76,6 @@ export default function AuroraCanvas() {
       gl.shaderSource(sh, src);
       gl.compileShader(sh);
       if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
-        // eslint-disable-next-line no-console
         console.warn(gl.getShaderInfoLog(sh));
       }
       return sh;
