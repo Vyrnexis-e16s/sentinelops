@@ -199,14 +199,14 @@ if [[ -f "$MR" ]]; then
   "$MN" -m pip install -r "$MR" 2>&1 | tee -a "$LOG_FILE" || log "ml pip: non-zero exit (check log)" "WARN"
 fi
 
-# --- Node 18+ ---
+# --- Node 20+ (Next.js 16 / frontend) ---
 if ! command -v node >/dev/null 2>&1; then
-  logerr "Install Node 18+ (https://github.com/nodesource/distributions#installation-instructions) or nvm"
+  logerr "Install Node 20+ (https://github.com/nodesource/distributions#installation-instructions) or nvm"
   exit 1
 fi
 NVER="$(node -p "parseInt(process.versions.node, 10)" 2>/dev/null || echo 0)"
-if [[ "$NVER" -lt 18 ]]; then
-  logerr "Node 18+ required, got: $(node -v)"
+if [[ "$NVER" -lt 20 ]]; then
+  logerr "Node 20+ required for the Next.js 16 frontend, got: $(node -v)"
   exit 1
 fi
 log "Node: $(node -v)"

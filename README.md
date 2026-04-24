@@ -17,7 +17,7 @@ It is not a replacement for Splunk, Nessus, Suricata, or a real KMS. It is a por
 ## Architecture at a glance
 
 ```
-┌─────────────────────────── Next.js 14 (App Router) ───────────────────────────┐
+┌─────────────────────────── Next.js 16 (App Router) ───────────────────────────┐
 │  Dashboard  │    SIEM    │   Recon   │    IDS    │   Vault   │  Theme Toggle │
 │             │            │           │           │           │ Tactical │ Aurora │
 └────────┬──────────────┬──────────────┬──────────────┬──────────────┬─────────┘
@@ -95,6 +95,8 @@ Placeholder image slots (replace with your files):
 
 ## Developing without Docker
 
+The **frontend** uses **Next.js 16** and needs **Node.js 20.9+** (the repo’s Docker/CI use Node 22).
+
 ```bash
 # Backend
 cd backend
@@ -104,7 +106,7 @@ uvicorn app.main:app --reload
 
 # Frontend
 cd frontend
-pnpm install
+corepack enable && pnpm install   # or: npm install
 pnpm dev
 
 # ML (retrain)

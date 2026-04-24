@@ -288,13 +288,13 @@ if (Test-Path $mlreq) {
   if ($LASTEXITCODE -ne 0) { Log "ml pip had warnings" "WARN" }
 }
 
-# --- Node 18+ ---
+# --- Node 20+ (Next.js 16 / frontend) ---
 if (-not (HasCmd "node")) {
-  Log "Install Node 18+ (nodejs.org) or: winget install OpenJS.NodeJS.LTS" "ERROR"
+  Log "Install Node 20+ (nodejs.org) or: winget install OpenJS.NodeJS.LTS" "ERROR"
   exit 1
 }
 $maj = [int]((node -v) -replace "v(\d+).*", '$1')
-if ($maj -lt 18) { Log "Node 18+ required" "ERROR"; exit 1 }
+if ($maj -lt 20) { Log "Node 20+ required for the Next.js 16 frontend" "ERROR"; exit 1 }
 Log "Node: $(node -v)"
 
 # --- frontend install + checks ---
