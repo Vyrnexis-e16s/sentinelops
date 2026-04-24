@@ -5,7 +5,7 @@ Two entry points (pick your OS):
 | Platform | Script | Notes |
 |----------|--------|--------|
 | **Windows** (Windows PowerShell 3+ or PowerShell 7+ `pwsh`) | `sentinelops-dev.ps1` | Run from repo root: `.\scripts\sentinelops-dev.ps1` |
-| **Linux** (Ubuntu / Debian / WSL) | `sentinelops-dev.sh` | `chmod +x scripts/sentinelops-dev.sh` then `./scripts/sentinelops-dev.sh` |
+| **Linux** (Ubuntu / Debian / Kali / Fedora / **WSL**, etc.) | `sentinelops-dev.sh` or `sentinelops-wsl.sh` (same) | `chmod +x scripts/sentinelops-dev.sh` then `./scripts/sentinelops-dev.sh` from the repo in Linux — **do not** run the whole thing with `sudo` (it breaks venv and npm; use a normal user). If Python is missing, use `SENTINELOPS_APT_INSTALL=1` only for the **apt** step on Debian family. **PEP 668** (Kali, Debian, Ubuntu) blocks system `pip install`; the script now skips that and only installs in `backend/.venv` and `ml/.venv` via `ensurepip` there. |
 
 ## What they do
 
@@ -48,3 +48,5 @@ Environment variables:
 - **Local frontend**: `cd frontend && pnpm dev` (or `npm run dev`).
 
 On **Linux**, unsupervised `sudo` is not run unless **`SENTINELOPS_APT_INSTALL=1`**. On **Windows**, **`winget` install/upgrade of Python** runs when it is on `PATH` and you did not pass **`-NoWingetPython`**.
+
+**Kali, Debian, Ubuntu (incl. WSL):** If you used **`sudo ./scripts/sentinelops-dev.sh`**, you may have root-owned `backend/.venv`. Fix: `sudo chown -R "$USER:$USER" backend ml frontend/node_modules` (as needed) or `rm -rf backend/.venv ml/.venv` and re-run **without** sudo. A broken venv with no `pip` is fixed the same way after installing **`python3-venv`** (and `python3.13-venv` on Kali 3.13) via apt.

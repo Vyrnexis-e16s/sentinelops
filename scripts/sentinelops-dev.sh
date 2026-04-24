@@ -5,7 +5,9 @@
 #   ./scripts/sentinelops-dev.sh                # full: venv + node + docker compose (Docker required)
 #   MODE=local ./scripts/sentinelops-dev.sh     # venv + node only
 #   MODE=docker ./scripts/sentinelops-dev.sh   # only: docker compose up -d --build
-#   SENTINELOPS_APT_INSTALL=1 ./scripts/sentinelops-dev.sh   # sudo: install/upgrade python3.12+ when missing or <3.11
+#   SENTINELOPS_APT_INSTALL=1 ./scripts/sentinelops-dev.sh   # apt (sudo) when Python 3.11+ missing — only for the apt step, not the whole script
+# WSL (Ubuntu, Kali, Debian, etc.): same script — from Linux: cd to repo, ./scripts/sentinelops-dev.sh  (or ./scripts/sentinelops-wsl.sh)
+# Do NOT run the whole script with sudo; it breaks venv/node ownership. Use a normal user; PEP 668 distros (Kali/Debian) are handled.
 set -euo pipefail
 
 MODE="${MODE:-full}"
@@ -16,6 +18,9 @@ LOG_FILE="${LOG_DIR}/sentinelops-dev-$(date +%Y%m%d-%H%M%S).log"
 log() { echo "[$(date -Iseconds)] $*" | tee -a "$LOG_FILE"; }
 logerr() { echo "[$(date -Iseconds)] ERROR: $*" | tee -a "$LOG_FILE" >&2; }
 log "Repository: $REPO_ROOT MODE=$MODE log=$LOG_FILE"
+if [[ "$(id -u)" -eq 0 ]]; then
+  log "WARN: Running as root is not recommended (venv, npm, and files become root-owned). Use your normal WSL user; only use sudo when apt install prompts (SENTINELOPS_APT_INSTALL=1) or for docker if your group setup requires it."
+fi
 
 if [[ ! -f "$REPO_ROOT/.env" && -f "$REPO_ROOT/.env.example" ]]; then
   cp "$REPO_ROOT/.env.example" "$REPO_ROOT/.env"
@@ -98,9 +103,13 @@ find_python() {
 }
 
 apt_install_python() {
-  log "SENTINELOPS_APT_INSTALL=1: apt install/upgrade python3.12, venv, pip…"
+  log "SENTINELOPS_APT_INSTALL=1: apt — python3-venv, python3-pip, and python 3.12+…"
   sudo apt-get update
-  sudo apt-get install -y python3.12-venv python3.12 python3.12-dev python3-pip
+  sudo apt-get install -y python3-venv python3-pip
+  # Pin 3.12 if available; also pull 3.13-venv on modern Kali/Debian when default is 3.13
+  sudo apt-get install -y python3.12-venv python3.12 python3.12-dev 2>/dev/null || true
+  sudo apt-get install -y python3.13-venv 2>/dev/null || true
+  sudo apt-get install -y --only-upgrade python3-venv python3-pip 2>/dev/null || true
   sudo apt-get install -y --only-upgrade python3.12 python3.12-venv 2>/dev/null || true
 }
 
@@ -115,28 +124,63 @@ if [[ -z "$PYTHON_PATH" ]]; then
 fi
 log "Python: $($PYTHON_PATH -c 'import sys; print(sys.executable, sys.version)')"
 
-ensure_pip() {
+# PEP 668: Debian, Kali, Ubuntu, etc. mark system Python as "externally managed" — do not pip install on it
+is_externally_managed() {
   local py="$1"
-  log "Checking pip (ensurepip + upgrade) for: $py"
+  "$py" -c 'import sys, pathlib
+v = "%d.%d" % (sys.version_info[0], sys.version_info[1])
+for base in (sys.prefix, "/usr", "/usr/local"):
+    p = pathlib.Path(base) / "lib" / ("python" + v) / "EXTERNALLY-MANAGED"
+    if p.is_file():
+        raise SystemExit(0)
+raise SystemExit(1)
+' 2>/dev/null
+}
+
+# Optional: upgrade pip on the *interpreter* only when PEP 668 does not block (no-op on venvs)
+ensure_pip_on_interpreter() {
+  local py="$1"
+  if is_externally_managed "$py"; then
+    log "PEP 668 (externally managed system Python): skipping system-level pip. Dependencies install only in backend/.venv and ml/.venv."
+    return 0
+  fi
+  log "Upgrading pip on non-managed interpreter: $py"
   if ! "$py" -m pip --version >/dev/null 2>&1; then
-    log "pip not found; running ensurepip…"
+    log "pip not on PATH for $py; ensurepip…"
     "$py" -m ensurepip --upgrade 2>&1 | tee -a "$LOG_FILE" || true
   fi
   if ! "$py" -m pip --version >/dev/null 2>&1; then
-    logerr "pip is still unavailable for $py. On Debian/Ubuntu: sudo apt install python3-pip python3-venv"
-    exit 1
+    log "pip still missing on $py (continuing; venv will use ensurepip)" "WARN"
+    return 0
   fi
-  "$py" -m pip install --upgrade pip setuptools wheel 2>&1 | tee -a "$LOG_FILE" || log "pip upgrade on base Python (non-fatal, venv will retry)" "WARN"
+  "$py" -m pip install --upgrade pip setuptools wheel 2>&1 | tee -a "$LOG_FILE" || log "pip upgrade on base Python (non-fatal)" "WARN"
 }
-ensure_pip "$PYTHON_PATH"
+ensure_pip_on_interpreter "$PYTHON_PATH"
+
+# Venvs are not subject to PEP 668; bootstrap pip *inside* each venv
+ensure_venv_pip() {
+  local vroot="$1"
+  local p="$vroot/bin/python"
+  [[ -x "$p" ]] || { logerr "Missing $p"; return 1; }
+  if ! "$p" -m pip --version >/dev/null 2>&1; then
+    log "Bootstrapping pip inside venv: $vroot (python -m ensurepip)"
+    "$p" -m ensurepip --upgrade 2>&1 | tee -a "$LOG_FILE" || true
+  fi
+  if ! "$p" -m pip --version >/dev/null 2>&1; then
+    logerr "venv at $vroot has no pip. Install: sudo apt install python3-venv   (Kali/Debian/Ubuntu) or dnf install python3-virtualenv (Fedora), then: rm -rf $vroot && re-run this script as a normal user (not sudo)."
+    return 1
+  fi
+  return 0
+}
 
 # --- backend venv ---
 BK="$REPO_ROOT/backend"
-BN="$BK/.venv/bin/python"
-if [[ ! -x "$BN" ]]; then
+if [[ ! -x "$BK/.venv/bin/python" ]]; then
   log "Creating backend/.venv"
   (cd "$BK" && "$PYTHON_PATH" -m venv .venv)
 fi
+ensure_venv_pip "$BK/.venv" || exit 1
+BN="$BK/.venv/bin/python"
 "$BN" -m pip install --upgrade pip 2>&1 | tee -a "$LOG_FILE"
 "$BN" -m pip install -r "$BK/requirements.txt" 2>&1 | tee -a "$LOG_FILE"
 
@@ -149,6 +193,7 @@ if [[ -f "$MR" ]]; then
     log "Creating ml/.venv"
     (cd "$ML" && "$PYTHON_PATH" -m venv .venv)
   fi
+  ensure_venv_pip "$ML/.venv" || exit 1
   MN="$ML/.venv/bin/python"
   "$MN" -m pip install --upgrade pip 2>&1 | tee -a "$LOG_FILE"
   "$MN" -m pip install -r "$MR" 2>&1 | tee -a "$LOG_FILE" || log "ml pip: non-zero exit (check log)" "WARN"

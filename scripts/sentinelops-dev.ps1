@@ -54,7 +54,25 @@ function Sync-MachinePath {
   if ($m -or $u) { $env:Path = "$m;$u" }
 }
 
+function Test-PythonExternallyManaged([string] $Interpreter) {
+  $py = @'
+import sys, pathlib
+v = "%d.%d" % (sys.version_info[0], sys.version_info[1])
+for base in (sys.prefix, "/usr", "/usr/local"):
+    p = pathlib.Path(base) / "lib" / ("python" + v) / "EXTERNALLY-MANAGED"
+    if p.is_file():
+        raise SystemExit(0)
+raise SystemExit(1)
+'@
+  $null = & $Interpreter -c $py 2>&1
+  return ($LASTEXITCODE -eq 0)
+}
+
 function Update-PipForBasePython([string] $Interpreter) {
+  if (Test-PythonExternallyManaged -Interpreter $Interpreter) {
+    Log "PEP 668 (externally managed Python): skipping system-level pip. Installs use backend/.venv and ml/.venv only."
+    return
+  }
   Log "ensurepip + pip install --upgrade (base interpreter): $Interpreter"
   $oldEa = $ErrorActionPreference
   $ErrorActionPreference = "Continue"
@@ -64,6 +82,24 @@ function Update-PipForBasePython([string] $Interpreter) {
   $pec = $LASTEXITCODE
   $pout | Tee-Object -FilePath $LogFile -Append
   if ($pec -ne 0) { Log "pip install --upgrade on base Python exited $pec (continuing; venv will retry)" "WARN" }
+}
+
+function Update-PipForVenv([string] $VenvDir) {
+  $py = Join-Path $VenvDir "Scripts\python.exe"
+  if (-not (Test-Path -LiteralPath $py)) { return }
+  $null = & $py -m pip --version 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    Log "Bootstrapping pip in venv: $VenvDir (ensurepip)"
+    $oldEa = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $null = & $py -m ensurepip --upgrade 2>&1 | Tee-Object -FilePath $LogFile -Append
+    $ErrorActionPreference = $oldEa
+  }
+  $null = & $py -m pip --version 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    Log "venv has no pip. Remove the folder and re-run, and install python3-venv (Linux) or repair Python. Path: $VenvDir" "ERROR"
+    exit 1
+  }
 }
 
 # Invoke "docker compose" (v2) or legacy "docker-compose" (v1); logs stdout/stderr to $LogFile
@@ -231,6 +267,7 @@ if (-not (Test-Path $bn)) {
   Push-Location $bd; & $PythonPath -m venv .venv; Pop-Location
 }
 $bn = Join-Path $bd ".venv\Scripts\python.exe"
+Update-PipForVenv -VenvDir (Join-Path $bd ".venv")
 & $bn -m pip install --upgrade pip 2>&1 | Tee-Object -FilePath $LogFile -Append
 & $bn -m pip install -r (Join-Path $bd "requirements.txt") 2>&1 | Tee-Object -FilePath $LogFile -Append
 if ($LASTEXITCODE -ne 0) { Log "backend pip install failed" "ERROR"; exit 1 }
@@ -245,6 +282,7 @@ if (Test-Path $mlreq) {
     Push-Location $ml; & $PythonPath -m venv .venv; Pop-Location
   }
   $mn = Join-Path $ml ".venv\Scripts\python.exe"
+  Update-PipForVenv -VenvDir (Join-Path $ml ".venv")
   & $mn -m pip install --upgrade pip 2>&1 | Tee-Object -FilePath $LogFile -Append
   & $mn -m pip install -r $mlreq 2>&1 | Tee-Object -FilePath $LogFile -Append
   if ($LASTEXITCODE -ne 0) { Log "ml pip had warnings" "WARN" }
