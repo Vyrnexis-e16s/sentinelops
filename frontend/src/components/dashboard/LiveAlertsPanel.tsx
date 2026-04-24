@@ -73,17 +73,21 @@ export function LiveAlertsPanel() {
 
     const token = getAccessToken();
     let ws: WebSocket | undefined;
+    let wsNoteTimer: ReturnType<typeof setTimeout> | undefined;
     if (token) {
       try {
         ws = new WebSocket(getAlertStreamUrl(token));
       } catch {
-        setWsNote("Could not open WebSocket URL.");
+        wsNoteTimer = runDeferred(() => {
+          if (!cancelled) setWsNote("Could not open WebSocket URL.");
+        });
       }
     }
     if (!ws) {
       return () => {
         cancelled = true;
         clearTimeout(start);
+        if (wsNoteTimer) clearTimeout(wsNoteTimer);
       };
     }
 
@@ -115,6 +119,7 @@ export function LiveAlertsPanel() {
     return () => {
       cancelled = true;
       clearTimeout(start);
+      if (wsNoteTimer) clearTimeout(wsNoteTimer);
       ws?.close();
     };
   }, []);
