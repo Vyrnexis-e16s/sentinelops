@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     # --- Recon ---
     recon_max_concurrency: int = Field(50, alias="RECON_MAX_CONCURRENCY")
     recon_timeout_seconds: int = Field(5, alias="RECON_TIMEOUT_SECONDS")
+    # Comma/space-separated. Empty = any target (dev). Example: "scanme.nmap.org,10.0.0.0/8,192.168.1.0/24"
+    recon_target_allowlist: str = Field("", alias="RECON_TARGET_ALLOWLIST")
     nvd_api_base: str = Field(
         "https://services.nvd.nist.gov/rest/json/cves/2.0", alias="NVD_API_BASE"
     )
@@ -66,7 +68,7 @@ class Settings(BaseSettings):
     # --- IDS ---
     ids_model_path: str = Field("/app/ml/artifacts/ids_rf.joblib", alias="IDS_MODEL_PATH")
 
-    # --- Ops / optional integrations (placeholders, see docs/ROADMAP.md) ---
+    # --- Ops / optional integrations reserved for roadmap features ---
     expose_prometheus: bool = Field(True, alias="EXPOSE_PROMETHEUS")
     kafka_bootstrap: str = Field("", alias="KAFKA_BOOTSTRAP")
     oidc_issuer: str = Field("", alias="OIDC_ISSUER")

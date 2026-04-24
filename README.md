@@ -2,7 +2,7 @@
 
 A unified security operations platform that folds four very different security disciplines into a single workspace. I built this because every job description I look at wants "full-stack security engineer who also knows ML" and that's really four skill trees at once — so instead of four tiny repos, I made one honest attempt at the whole thing.
 
-It is not a replacement for Splunk, Nessus, Suricata, or a real KMS. It is a portfolio-grade prototype that demonstrates how those capabilities fit together architecturally and how they'd present to an analyst on one screen.
+It is not a replacement for Splunk, Nessus, Suricata, or a managed KMS. It is a production-oriented reference implementation: real APIs, auth, workers, encryption, audit logging, and clear hardening notes for turning a lab deployment into a responsible service.
 
 ## What's in it
 
@@ -58,7 +58,7 @@ Then:
 - API docs at http://localhost:8000/docs
 - Default dev user: `analyst@sentinelops.local` / passkey registered on first visit
 
-`make seed` loads a few weeks of fake SIEM events and a handful of known-bad CVEs so the dashboard isn't empty.
+`make seed` loads deterministic development telemetry and known-bad CVE examples so local dashboards can be verified without connecting external agents.
 
 ### Automated setup (Windows & Linux)
 
@@ -125,7 +125,7 @@ CI runs the same commands on every push and on pull requests into `main`.
 
 ## What I'd do next
 
-This repo is a **portfolio** piece: it shows the architecture, not a full commercial SOC. A detailed backlog — production gaps, research ideas, and **what is already stubbed in config or code** — is in [`docs/ROADMAP.md`](docs/ROADMAP.md).
+This repo is a **production-oriented security platform reference**: real module APIs are implemented, while commercial-scale gaps and future integrations are tracked openly. Production hardening guidance is in [`docs/PRODUCTION.md`](docs/PRODUCTION.md), and the detailed backlog is in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 **Shipped in-tree (v1+ extensions)** include: a **limited Sigma → rule DSL** compiler (`POST /api/v1/siem/sigma/compile`), **STIX indicator ingest** and **IOC enrichment** on event ingest, a **WebSocket** alert stream at `/ws/alerts?token=`, a **per-source UEBA-style** volume summary, **case investigations** CRUD, **Prometheus** metrics at `/metrics` when enabled, an IDS **drift** summary and **explanation proxy** (tree feature importance) on inference, and a **command palette (⌘K)** on the UI.
 
@@ -137,7 +137,7 @@ Remaining themes: full Sigma parity, a real TAXII **client** with scheduling, di
 
 - Only run the `recon` module against hosts, domains, and IP ranges that you own, that your employer has contracted you to test, or for which you hold explicit written authorisation (a bug-bounty program in-scope list counts, out-of-scope does not).
 - Unauthorised scanning, credential harvesting, or traffic interception against third-party systems is illegal in most jurisdictions (CFAA in the US, Computer Misuse Act in the UK, IT Act in India, etc.) — getting caught is on you.
-- The cryptographic primitives in this codebase are fit for portfolio-grade demos. **Do not** put production secrets, PII, or regulated data in a SentinelOps Vault instance without first replacing the software master key with a real HSM/KMS and going through a proper review.
+- The Vault uses real envelope-encryption primitives, but production secrets, PII, or regulated data still require a reviewed deployment, operational key management, and preferably an HSM/KMS-backed master key.
 - The ML IDS model is trained on NSL-KDD, which is a teaching dataset with well-known coverage gaps. It is **not** a substitute for a commercial IDS on a real network.
 - This software is provided **"AS IS"**, without warranty of any kind (see the Apache 2.0 `LICENSE` file for the formal language). The authors and contributors accept no liability for damage, downtime, legal trouble, or any other consequence arising from your use of this code. You are the sole responsible party for how, where, and against what you run it.
 

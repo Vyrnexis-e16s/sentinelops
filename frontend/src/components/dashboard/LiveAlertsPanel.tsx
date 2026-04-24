@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { AlertTriangle } from "lucide-react";
-import { api, type Alert, type Paginated } from "@/lib/api";
+import { api, type Alert, type ApiError, type Paginated } from "@/lib/api";
 import { getAccessToken } from "@/lib/auth";
 import { getAlertStreamUrl } from "@/lib/ws";
+import { runDeferred } from "@/lib/schedule-deferred";
 
 type Live = { id: string; title: string; detail: string; severity: string };
 
@@ -16,40 +17,33 @@ const sevColor = (s: string) =>
       : "text-ok";
 
 const NO_TOKEN_MSG =
-  "Set JWT in localStorage sentinelops_access_token for live WebSocket alerts.";
+  "Add JWT in localStorage sentinelops_access_token for the WebSocket alert stream.";
+
+type PanelMode = "empty" | "api" | "live" | "error" | "unauthenticated";
 
 export function LiveAlertsPanel() {
   const [rows, setRows] = useState<Live[]>([]);
-  const [mode, setMode] = useState<"sample" | "api" | "live">("sample");
+  const [mode, setMode] = useState<PanelMode>("empty");
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [wsNote, setWsNote] = useState<string | null>(null);
   const hasToken = Boolean(getAccessToken());
   const tokenHint = !hasToken ? NO_TOKEN_MSG : null;
 
   useEffect(() => {
-    const sample: Live[] = [
-      {
-        id: "a-7841",
-        title: "SSH brute force from 203.0.113.4",
-        severity: "high",
-        detail: "sample · shown until API data loads"
-      },
-      {
-        id: "a-7840",
-        title: "Suspicious PowerShell -enc payload",
-        severity: "medium",
-        detail: "sample"
-      }
-    ];
-
     let cancelled = false;
-    const load = async () => {
+
+    const loadRest = async () => {
       try {
         const p = await api.get<Paginated<Alert>>("/api/v1/siem/alerts?size=5");
-        if (cancelled || !p.items.length) {
-          setRows(sample);
+        if (cancelled) return;
+        if (!p.items.length) {
+          setRows([]);
+          setMode("empty");
+          setLoadError(null);
           return;
         }
         setMode("api");
+        setLoadError(null);
         setRows(
           p.items.map((a) => ({
             id: a.id.slice(0, 8),
@@ -58,35 +52,44 @@ export function LiveAlertsPanel() {
             detail: `${a.status} · score ${a.score.toFixed(2)}`
           }))
         );
-      } catch {
-        if (!cancelled) {
-          setRows(sample);
-          setMode("sample");
+      } catch (e) {
+        if (cancelled) return;
+        const a = e as ApiError;
+        if (a.status === 401) {
+          setMode("unauthenticated");
+          setRows([]);
+          setLoadError("Sign in to load alerts from the API.");
+        } else {
+          setMode("error");
+          setRows([]);
+          setLoadError(a.detail || "Could not load alerts.");
         }
       }
     };
-    void load();
+
+    const start = runDeferred(() => {
+      void loadRest();
+    });
 
     const token = getAccessToken();
-    if (!token) {
-      return () => {
-        cancelled = true;
-      };
-    }
-
     let ws: WebSocket | undefined;
-    try {
-      ws = new WebSocket(getAlertStreamUrl(token));
-    } catch {
-      queueMicrotask(() => {
-        if (!cancelled) setWsNote("Could not open WebSocket URL.");
-      });
+    if (token) {
+      try {
+        ws = new WebSocket(getAlertStreamUrl(token));
+      } catch {
+        setWsNote("Could not open WebSocket URL.");
+      }
+    }
+    if (!ws) {
       return () => {
         cancelled = true;
+        clearTimeout(start);
       };
     }
 
-    ws.onopen = () => setMode("live");
+    ws.onopen = () => {
+      if (!cancelled) setMode("live");
+    };
     ws.onmessage = (ev) => {
       try {
         const j = JSON.parse(ev.data as string) as {
@@ -100,6 +103,7 @@ export function LiveAlertsPanel() {
         const severity =
           j.severity === "high" || j.severity === "critical" ? "high" : "medium";
         const detail = `live · score ${typeof j.score === "number" ? j.score.toFixed(2) : "—"}`;
+        setMode("live");
         setRows((prev: Live[]) => [{ id, title, severity, detail }, ...prev].slice(0, 8));
       } catch {
         /* ignore */
@@ -110,9 +114,13 @@ export function LiveAlertsPanel() {
 
     return () => {
       cancelled = true;
+      clearTimeout(start);
       ws?.close();
     };
   }, []);
+
+  const modeLabel =
+    mode === "live" ? "live · ws" : mode === "api" ? "rest" : mode === "empty" ? "no rows" : mode;
 
   return (
     <div className="glass rounded-xl p-4">
@@ -120,14 +128,19 @@ export function LiveAlertsPanel() {
         <div className="text-sm font-semibold flex items-center gap-2">
           <AlertTriangle className="h-4 w-4 text-warn" /> Recent alerts
         </div>
-        <div className="text-[10px] text-muted">
-          {mode === "live" ? "live · ws" : mode === "api" ? "rest" : "sample"}
-        </div>
+        <div className="text-[10px] text-muted">{modeLabel}</div>
       </div>
       {(tokenHint || wsNote) && (
         <div className="text-[10px] text-muted mb-2">{tokenHint ?? wsNote}</div>
       )}
+      {loadError && <div className="text-[11px] text-warn/90 mb-2">{loadError}</div>}
       <ul className="space-y-2 text-sm">
+        {rows.length === 0 && !loadError && mode === "empty" && (
+          <li className="text-xs text-muted px-1 py-2">
+            No alerts yet. Ingest events into the SIEM, or use `make seed` in a dev environment to load
+            development telemetry.
+          </li>
+        )}
         {rows.map((a: Live) => (
           <li
             key={a.id + a.detail}

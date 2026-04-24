@@ -13,6 +13,7 @@ import {
   type ReconJob,
   type ReconTarget
 } from "@/lib/api";
+import { runDeferred } from "@/lib/schedule-deferred";
 
 type JobKind = "subdomain" | "port" | "cve" | "webfuzz";
 type TargetKind = "domain" | "host" | "cidr";
@@ -43,7 +44,7 @@ function statusPillClass(status: string) {
 }
 
 export default function ReconPage() {
-  const [target, setTarget] = useState("example.com");
+  const [target, setTarget] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -77,7 +78,8 @@ export default function ReconPage() {
   }, []);
 
   useEffect(() => {
-    void loadLists();
+    const t = runDeferred(() => void loadLists());
+    return () => clearTimeout(t);
   }, [loadLists]);
 
   useEffect(() => {

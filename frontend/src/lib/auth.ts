@@ -8,7 +8,7 @@ function readNextPublic(name: "NEXT_PUBLIC_DEV_TOKEN"): string | null {
 
 /**
  * After WebAuthn login, persist the JWT here so `fetch` and WebSocket can attach it.
- * Also accept `NEXT_PUBLIC_DEV_TOKEN` in `.env.local` for local UI-only demos.
+ * Also accept `NEXT_PUBLIC_DEV_TOKEN` in `.env.local` for local development.
  */
 export function getAccessToken(): string | null {
   if (typeof window === "undefined") {

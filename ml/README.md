@@ -6,7 +6,7 @@ The IDS module's brain. A scikit-learn pipeline (`StandardScaler` + `OneHotEncod
 
 - `scripts/train_ids.py` — trainer (works on real NSL-KDD or a synthetic fallback).
 - `scripts/test_inference.py` — sanity check that loads the artifact and runs one prediction.
-- `artifacts/ids_rf.joblib` — pre-trained pipeline. Built from synthetic data so the demo works without downloading the 200 MB NSL-KDD archive.
+- `artifacts/ids_rf.joblib` — pre-trained pipeline. Built from synthetic development data so the IDS API works without downloading the 200 MB NSL-KDD archive; retrain on NSL-KDD for stronger evaluation.
 - `notebooks/eda.ipynb` — exploratory walkthrough of the dataset and feature importances.
 
 ## Retraining on real NSL-KDD

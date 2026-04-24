@@ -5,7 +5,7 @@ import * as THREE from "three";
 
 /**
  * Tactical Night hero — a slowly rotating wireframe globe with pulsing arcs
- * representing live threat origins. Pure three.js (no extras), so the bundle
+ * with decorative surface markers. Pure three.js (no extras), so the bundle
  * stays tight.
  */
 export default function Globe({ height = 360 }: { height?: number }) {
@@ -41,17 +41,21 @@ export default function Globe({ height = 360 }: { height?: number }) {
     );
     scene.add(inner);
 
-    // Threat dots
+    // Decorative markers (deterministic per index, not live SIEM data)
     const N = 36;
     const dotGeo = new THREE.SphereGeometry(0.025, 8, 8);
     const dots: THREE.Mesh[] = [];
+    const unitRand = (i: number) => {
+      const s = Math.sin(i * 12.9898 + 78.233) * 43758.5453;
+      return s - Math.floor(s);
+    };
     for (let i = 0; i < N; i++) {
       const m = new THREE.Mesh(
         dotGeo,
         new THREE.MeshBasicMaterial({ color: i % 5 === 0 ? 0xff5562 : 0xffb547 })
       );
-      const u = Math.random();
-      const v = Math.random();
+      const u = unitRand(i);
+      const v = unitRand(i + 17);
       const theta = 2 * Math.PI * u;
       const phi = Math.acos(2 * v - 1);
       const r = 1.62;

@@ -11,6 +11,7 @@ import {
   type IdsModelInfo,
   type Inference
 } from "@/lib/api";
+import { runDeferred } from "@/lib/schedule-deferred";
 
 const DEFAULT_FEATURES = `{
   "duration": 0,
@@ -60,7 +61,8 @@ export default function IdsPage() {
   }, []);
 
   useEffect(() => {
-    void loadModelAndHistory();
+    const t = runDeferred(() => void loadModelAndHistory());
+    return () => clearTimeout(t);
   }, [loadModelAndHistory]);
 
   async function runInference() {

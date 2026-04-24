@@ -13,6 +13,7 @@ from app.core.errors import ForbiddenError, NotFoundError
 from app.core.logging import get_logger
 from app.core.security import current_user
 from app.models.user import User
+from app.modules.recon.allowlist import target_matches_allowlist
 from app.modules.recon.models import Finding, ReconJob, Target
 from app.modules.recon.schemas import (
     FindingOut,
@@ -41,6 +42,12 @@ async def create_target(
     user: User = Depends(current_user),
     audit: AuditService = Depends(audit_logger),
 ) -> TargetOut:
+    if not target_matches_allowlist(payload.value):
+        raise ForbiddenError(
+            "Target is not permitted by RECON_TARGET_ALLOWLIST. "
+            "Add this host, domain suffix, or CIDR to the allowlist, or clear it for local-only use."
+        )
+
     res = await db.execute(
         select(Target).where(Target.owner_id == user.id, Target.value == payload.value)
     )

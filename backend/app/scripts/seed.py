@@ -1,4 +1,4 @@
-"""Idempotent demo data seeder.
+"""Idempotent development data seeder.
 
 Run inside the backend container:
     python -m app.scripts.seed
@@ -40,7 +40,7 @@ EVENT_VERBS = [
 ]
 
 
-async def _ensure_demo_user(session) -> User:
+async def _ensure_dev_user(session) -> User:
     existing = (
         await session.execute(select(User).where(User.email == "analyst@sentinelops.local"))
     ).scalar_one_or_none()
@@ -49,7 +49,7 @@ async def _ensure_demo_user(session) -> User:
     user = User(
         id=uuid.uuid4(),
         email="analyst@sentinelops.local",
-        display_name="Demo Analyst",
+        display_name="Development Analyst",
         is_active=True,
     )
     session.add(user)
@@ -152,11 +152,11 @@ async def _seed_ids(session) -> None:
 async def _seed_vault(session, user: User) -> None:
     if (await session.execute(select(VaultObject).where(VaultObject.owner_id == user.id))).scalars().first():
         return
-    samples = [
+    vault_seed_files = [
         ("ir-runbook.md", b"# Incident Response Runbook\n\n1. Triage\n2. Contain\n3. Eradicate\n4. Recover\n"),
-        ("ssh-keys.txt", b"placeholder -- dummy demo content, do not use\n"),
+        ("forensics-notes.txt", b"Development seed artifact for Vault encryption verification.\n"),
     ]
-    for name, payload in samples:
+    for name, payload in vault_seed_files:
         blob = encryption.encrypt_for_user(payload, user.id)
         oid = uuid.uuid4()
         path = storage.write_blob(user.id, oid, blob.ciphertext)
@@ -173,7 +173,7 @@ async def _seed_vault(session, user: User) -> None:
                 dek_nonce=blob.dek_nonce,
             )
         )
-    log.info("vault_seeded", objects=len(samples))
+    log.info("vault_seeded", objects=len(vault_seed_files))
 
 
 async def main() -> None:
@@ -181,7 +181,7 @@ async def main() -> None:
     factory = get_session_factory()
     async with factory() as session:
         async with session.begin():
-            user = await _ensure_demo_user(session)
+            user = await _ensure_dev_user(session)
             await _seed_siem(session, user)
             await _seed_recon(session, user)
             await _seed_ids(session)

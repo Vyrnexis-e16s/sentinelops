@@ -12,6 +12,7 @@ import {
   vaultDownloadBlob,
   vaultUpload
 } from "@/lib/api";
+import { runDeferred } from "@/lib/schedule-deferred";
 
 function formatBytes(n: number) {
   if (n < 1024) return `${n} B`;
@@ -55,7 +56,8 @@ export default function VaultPage() {
   }, []);
 
   useEffect(() => {
-    void load();
+    const t = runDeferred(() => void load());
+    return () => clearTimeout(t);
   }, [load]);
 
   const onPickFiles = (e: React.ChangeEvent<HTMLInputElement>) => {

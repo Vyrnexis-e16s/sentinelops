@@ -327,7 +327,7 @@ if ($Mode -eq "full") {
     exit 1
   }
   Log "Stack is up. UI http://localhost:3000  |  API http://localhost:8000/docs"
-  Log "Seed demo data: docker compose -f infra/docker/docker-compose.yml exec backend python -m app.scripts.seed"
+  Log "Seed development data: docker compose -f infra/docker/docker-compose.yml exec backend python -m app.scripts.seed"
 }
 
 Log "Finished OK"

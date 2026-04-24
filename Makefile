@@ -7,7 +7,7 @@ help:
 	@echo "  make down          Stop the stack"
 	@echo "  make build         Rebuild all docker images"
 	@echo "  make logs          Tail logs from all services"
-	@echo "  make seed          Load demo events, users, and CVEs"
+	@echo "  make seed          Load development events, users, and CVEs"
 	@echo "  make test          Run all test suites"
 	@echo "  make test-backend  pytest inside the backend container"
 	@echo "  make test-frontend vitest inside the frontend container"

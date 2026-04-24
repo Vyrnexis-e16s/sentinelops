@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { Filter, Plus, Search } from "lucide-react";
 import SectionHeader from "@/components/shared/SectionHeader";
-import { api, type Alert, type Paginated } from "@/lib/api";
+import { api, type Alert, type ApiError, type Paginated } from "@/lib/api";
+import { runDeferred } from "@/lib/schedule-deferred";
 
 type Rule = {
   id: string;
@@ -13,69 +14,101 @@ type Rule = {
   enabled: boolean;
 };
 
+type RuleCreate = {
+  name: string;
+  description?: string;
+  query_dsl: {
+    all_of?: Array<{ field: string; op: string; value?: unknown }>;
+    any_of?: Array<{ field: string; op: string; value?: unknown }>;
+    none_of?: Array<{ field: string; op: string; value?: unknown }>;
+    score?: number;
+    severity?: string;
+  };
+  enabled?: boolean;
+  attack_technique_ids?: string[];
+};
+
 export default function SiemPage() {
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [rules, setRules] = useState<Rule[]>([]);
   const [err, setErr] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState<"all" | Alert["status"]>("all");
 
-  useEffect(() => {
-    let cancel = false;
-    (async () => {
-      try {
-        const [a, r] = await Promise.all([
-          api.get<Paginated<Alert>>("/api/v1/siem/alerts?size=12"),
-          api.get<Rule[]>("/api/v1/siem/rules")
-        ]);
-        if (!cancel) {
-          setAlerts(a.items);
-          setRules(r);
-        }
-      } catch (e: unknown) {
-        if (!cancel) {
-          setErr(
-            e && typeof e === "object" && "detail" in e
-              ? String((e as { detail: string }).detail)
-              : "Not connected (auth + API required). Demo table below."
-          );
-        }
-      }
-    })();
-    return () => {
-      cancel = true;
-    };
+  const load = useCallback(async () => {
+    try {
+      const [a, r] = await Promise.all([
+        api.get<Paginated<Alert>>("/api/v1/siem/alerts?size=50"),
+        api.get<Rule[]>("/api/v1/siem/rules")
+      ]);
+      setAlerts(a.items);
+      setRules(r);
+      setErr(null);
+    } catch (e: unknown) {
+      const a = e as ApiError;
+      setErr(a.detail || "Not connected. Sign in and ensure the API is running.");
+      setAlerts([]);
+      setRules([]);
+    }
   }, []);
 
-  const fallbackAlerts: Alert[] = [
-    {
-      id: "00000000-0000-0000-0000-0000000000a0",
-      event_id: "00000000-0000-0000-0000-0000000000e0",
-      rule_id: null,
-      rule_name: "dns.tunneling",
-      score: 0.74,
-      status: "ack",
-      created_at: new Date().toISOString(),
-      alert_kind: "detection"
-    },
-    {
-      id: "00000000-0000-0000-0000-0000000000a1",
-      event_id: "00000000-0000-0000-0000-0000000000e1",
-      rule_id: null,
-      rule_name: "threat.intel.ioc",
-      score: 0.9,
-      status: "new",
-      created_at: new Date().toISOString(),
-      alert_kind: "threat_intel"
+  useEffect(() => {
+    const t = runDeferred(() => void load());
+    return () => clearTimeout(t);
+  }, [load]);
+
+  const displayAlerts = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return alerts.filter((a) => {
+      if (status !== "all" && a.status !== status) return false;
+      if (!q) return true;
+      return [a.id, a.rule_name || "", a.alert_kind || "", a.status]
+        .join(" ")
+        .toLowerCase()
+        .includes(q);
+    });
+  }, [alerts, query, status]);
+
+  const techniqueCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    rules.forEach((r) => {
+      r.attack_technique_ids_array.forEach((id) => {
+        counts.set(id, (counts.get(id) || 0) + 1);
+      });
+    });
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+  }, [rules]);
+
+  const createRule = async () => {
+    setErr(null);
+    const raw = window.prompt(
+      "Paste RuleCreate JSON",
+      JSON.stringify(
+        {
+          name: "high.severity.event",
+          description: "Alert when parsed severity is high.",
+          query_dsl: {
+            any_of: [{ field: "severity", op: "in", value: ["high", "critical"] }],
+            score: 7,
+            severity: "high"
+          },
+          enabled: true,
+          attack_technique_ids: []
+        },
+        null,
+        2
+      )
+    );
+    if (!raw) return;
+    try {
+      const payload = JSON.parse(raw) as RuleCreate;
+      await api.post<Rule>("/api/v1/siem/rules", payload);
+      await load();
+    } catch (e) {
+      const a = e as ApiError;
+      setErr(a.detail || "Rule creation failed. Check JSON and API validation.");
     }
-  ];
-
-  const displayAlerts = alerts.length > 0 ? alerts : fallbackAlerts;
-
-  const fallbackRules: Rule[] = [
-    { id: "1", name: "ssh.bruteforce", attack_technique_ids_array: ["T1110"], enabled: true },
-    { id: "2", name: "ps.encoded_command", attack_technique_ids_array: ["T1059.001"], enabled: true }
-  ];
-
-  const displayRules = rules.length > 0 ? rules : fallbackRules;
+  };
 
   return (
     <div className="space-y-6">
@@ -86,6 +119,7 @@ export default function SiemPage() {
         right={
           <button
             type="button"
+            onClick={() => void createRule()}
             className="text-xs px-3 py-1.5 rounded-md border border-border/70 hover:border-accent/60 inline-flex items-center gap-1"
           >
             <Plus className="h-3.5 w-3.5" /> New rule
@@ -99,16 +133,26 @@ export default function SiemPage() {
         <div className="flex items-center gap-2 px-2 py-1.5 rounded-md border border-border/60 text-xs text-muted w-full sm:w-72">
           <Search className="h-3.5 w-3.5" />
           <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
             placeholder="Filter alerts…"
             className="bg-transparent outline-none flex-1 placeholder:text-muted text-text"
           />
         </div>
-        <button
-          type="button"
-          className="text-xs px-3 py-1.5 rounded-md border border-border/70 hover:border-accent/60 inline-flex items-center gap-1"
-        >
-          <Filter className="h-3.5 w-3.5" /> All severities
-        </button>
+        <label className="text-xs px-3 py-1.5 rounded-md border border-border/70 inline-flex items-center gap-1">
+          <Filter className="h-3.5 w-3.5" />
+          <select
+            value={status}
+            onChange={(e) => setStatus(e.target.value as typeof status)}
+            className="bg-transparent outline-none"
+          >
+            <option value="all">All statuses</option>
+            <option value="new">New</option>
+            <option value="ack">Ack</option>
+            <option value="resolved">Resolved</option>
+            <option value="false_positive">False positive</option>
+          </select>
+        </label>
       </div>
 
       <div className="glass rounded-xl overflow-hidden">
@@ -144,6 +188,13 @@ export default function SiemPage() {
                 </td>
               </motion.tr>
             ))}
+            {displayAlerts.length === 0 && (
+              <tr className="border-t border-border/40">
+                <td colSpan={4} className="px-4 py-6 text-center text-xs text-muted">
+                  No alerts match the current filters. Ingest events or enable detection rules to populate this table.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -152,7 +203,7 @@ export default function SiemPage() {
         <div className="glass rounded-xl p-4 lg:col-span-2">
           <div className="text-sm font-semibold mb-2">Detection rules</div>
           <ul className="text-sm divide-y divide-border/40">
-            {displayRules.map((r: Rule) => (
+            {rules.map((r: Rule) => (
               <li key={r.id} className="py-2 flex items-center gap-3">
                 <span className={`h-2 w-2 rounded-full ${r.enabled ? "bg-ok" : "bg-muted"}`} />
                 <span className="font-mono text-xs">{r.name}</span>
@@ -162,27 +213,27 @@ export default function SiemPage() {
                 </span>
               </li>
             ))}
+            {rules.length === 0 && (
+              <li className="py-3 text-xs text-muted">No rules returned by the API.</li>
+            )}
           </ul>
         </div>
 
         <div className="glass rounded-xl p-4">
-          <div className="text-sm font-semibold mb-3">Top tactics today</div>
+          <div className="text-sm font-semibold mb-3">MITRE technique coverage</div>
           <ul className="text-sm space-y-2">
-            {[
-              ["Initial Access", 12],
-              ["Execution", 9],
-              ["Lateral Movement", 7],
-              ["Credential Access", 5],
-              ["C2", 4]
-            ].map(([k, v]) => (
+            {techniqueCounts.map(([k, v]) => (
               <li key={k as string} className="flex items-center gap-3">
                 <span className="text-xs text-muted w-36 truncate">{k as string}</span>
                 <div className="flex-1 h-1.5 rounded-full bg-border/40 overflow-hidden">
-                  <div className="h-full bg-accent" style={{ width: `${(v as number) * 7}%` }} />
+                  <div className="h-full bg-accent" style={{ width: `${Math.min(100, (v as number) * 20)}%` }} />
                 </div>
                 <span className="text-xs text-muted w-6 text-right">{v as number}</span>
               </li>
             ))}
+            {techniqueCounts.length === 0 && (
+              <li className="text-xs text-muted">No MITRE techniques are attached to current rules.</li>
+            )}
           </ul>
         </div>
       </div>

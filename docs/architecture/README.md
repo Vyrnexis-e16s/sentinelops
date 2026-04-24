@@ -108,10 +108,10 @@ JWTs are short-lived (60 min default). Long-lived auth is re-authentication via 
 
 **FastAPI over Django.** Async support is first-class, OpenAPI comes for free, the type-driven approach meshes well with Pydantic. Django's admin is tempting but we don't need it.
 
-**Next.js over Vite + Express.** App Router + server components give us SSR for the dashboard (good for SEO on the public demo) and we can co-locate API routes for WebAuthn origin matching.
+**Next.js over Vite + Express.** App Router + server components give us SSR for the dashboard (good for SEO on the public project page) and we can co-locate API routes for WebAuthn origin matching.
 
 **scikit-learn over PyTorch for IDS.** NSL-KDD is tabular; trees outperform MLPs here and the model fits in 5MB. Keeps the Docker image small.
 
 **Celery over RQ / arq.** Celery's ecosystem (flower, beat, chord primitives) is still the best-documented.
 
-**Postgres over Elasticsearch for SIEM.** This is a teaching project. For real event volumes you'd stream through Kafka into ClickHouse or OpenSearch; pretending otherwise would make the demo misleading.
+**Postgres over Elasticsearch for SIEM.** For very large event volumes, stream through Kafka into ClickHouse or OpenSearch; the Postgres path is the default operational baseline for this repository.

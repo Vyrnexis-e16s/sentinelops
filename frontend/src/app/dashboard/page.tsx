@@ -9,6 +9,7 @@ import StatCard from "@/components/shared/StatCard";
 import SectionHeader from "@/components/shared/SectionHeader";
 import { LiveAlertsPanel } from "@/components/dashboard/LiveAlertsPanel";
 import { api, type ApiError, type Inference, type Paginated, type ReconJob, type VaultObject } from "@/lib/api";
+import { runDeferred } from "@/lib/schedule-deferred";
 
 const Globe = dynamic(() => import("@/components/three/Globe"), { ssr: false });
 
@@ -80,9 +81,14 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    void loadStats();
-    const t = setInterval(() => void loadStats(), 30000);
-    return () => clearInterval(t);
+    const t0 = runDeferred(() => void loadStats());
+    const t = setInterval(() => {
+      void loadStats();
+    }, 30000);
+    return () => {
+      clearTimeout(t0);
+      clearInterval(t);
+    };
   }, [loadStats]);
 
   const fmt = (n: number | null, suffix = "") =>
@@ -123,7 +129,7 @@ export default function DashboardPage() {
           tone="neutral"
         />
         <StatCard
-          label="IDS attack rate (sample)"
+          label="IDS attack rate (recent)"
           value={idsValue}
           delta={idsDelta}
           tone="good"
@@ -147,7 +153,7 @@ export default function DashboardPage() {
             <div className="text-sm font-semibold flex items-center gap-2">
               <Activity className="h-4 w-4 text-accent" /> Threat origins (24h)
             </div>
-            <div className="text-[11px] text-muted">visualization · demo geometry</div>
+            <div className="text-[11px] text-muted">3D view · not mapped from event geo-IP (decorative)</div>
           </div>
           <Globe height={320} />
         </motion.div>

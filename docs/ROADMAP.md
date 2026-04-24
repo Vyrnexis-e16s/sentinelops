@@ -27,7 +27,7 @@ What's here now, what landed recently, and what a **production** build would sti
 - **STIX/TAXII** — persistent TAXII 2.1 client (Discovery, API Root, `GET /collections/…/objects`), feed scheduling, error budgets, and versioned last-seen.
 - **WebSocket** — back-pressure, replay buffer for missed alerts after reconnect, role-scoped rooms.
 - **UEBA** — per-user and per-entity **seasonal** baselines (EWMA / STL), peer groups, not only global source volume.
-- **Kafka / Redpanda** — optional ingest bus with exactly-once semantics into Postgres or ClickHouse hot tier; `KAFKA_BOOTSTRAP` in config is a placeholder.
+- **Kafka / Redpanda** — optional ingest bus with exactly-once semantics into Postgres or ClickHouse hot tier; `KAFKA_BOOTSTRAP` is reserved in config.
 - **Elastic / OpenSearch** — hot/warm for search-heavy deployments (explicit non-goal for v1, noted for honesty).
 
 ## Offensive / Recon (next)
@@ -49,12 +49,12 @@ What's here now, what landed recently, and what a **production** build would sti
 
 - **HSM / PKCS#11** — `HSM_PKCS11_LIB` is reserved; replace software KEK with HSM/Cloud HSM; SoftHSM for local dev.
 - **Key rotation** — wrap-unwrap-rewrap with two KEKs (overlap window), zero user-visible downtime.
-- **Post-quantum hybrid** — ML-KEM (Kyber) in the key-wrap path (`PQC_KYBER_HYBRID` flag placeholder).
+- **Post-quantum hybrid** — ML-KEM (Kyber) in the key-wrap path (`PQC_KYBER_HYBRID` is reserved).
 - **S3/MinIO** — blob backend instead of local FS (`S3_VAULT_ENDPOINT`).
 
 ## Platform & operations (next)
 
-- **Multi-tenant + RBAC** — workspace → team → user; Postgres **RLS**; OIDC for SSO (`OIDC_ISSUER` placeholder).
+- **Multi-tenant + RBAC** — workspace → team → user; Postgres **RLS**; OIDC for SSO (`OIDC_ISSUER` is reserved).
 - **OpenTelemetry** — traces API → workers → DB; trace IDs on audit entries; Grafana/Tempo/Loki pack under `infra/observability/` (folder TBD in repo).
 - **Helm + Terraform** — EKS / GKE / AKS one-shot with secrets externalized.
 - **Grafana dashboard** — JSON for RED metrics, Celery, Postgres.
@@ -71,7 +71,7 @@ What's here now, what landed recently, and what a **production** build would sti
 - **LLM triage** — local open model (vLLM / llama.cpp), optional offline-only; no paid API as default; prompt templates per MITRE technique.
 - **Neo4j** — `NEO4J_URI` reserved; BFS/shortest path on alert/entity graph for kill chain narrative.
 - **eBPF** — small Go agent streaming syscalls + socket events into SIEM normalisation.
-- **Deception / honey-tokens** — salted fake credentials in Vault that fire a high-severity alert when accessed.
+- **Deception / honey-tokens** — planted canary credentials in Vault that fire a high-severity alert when accessed.
 
 ## Data & ML platform (next)
 

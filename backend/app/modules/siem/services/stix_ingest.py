@@ -66,6 +66,10 @@ def synthetic_rows_from_stix2_objects(
     out: list[dict[str, Any]] = []
     for obj in items:
         if isinstance(obj, dict) and obj.get("type") == "indicator":
-            fake: dict[str, Any] = {"type": "bundle", "id": f"bundle--{uuid.uuid4()}", "objects": [obj]}
-            out.extend(extract_from_bundle(fake))
+            single_object_bundle: dict[str, Any] = {
+                "type": "bundle",
+                "id": f"bundle--{uuid.uuid4()}",
+                "objects": [obj],
+            }
+            out.extend(extract_from_bundle(single_object_bundle))
     return out
