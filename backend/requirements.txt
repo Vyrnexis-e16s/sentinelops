@@ -17,7 +17,7 @@ alembic==1.13.3
 greenlet==3.1.1
 
 # --- Cache / Queue ---
-redis==5.1.1
+redis==7.4.0
 celery==5.4.0
 kombu==5.4.2
 
