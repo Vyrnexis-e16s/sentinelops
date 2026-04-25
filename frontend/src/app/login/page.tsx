@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { Fingerprint, ShieldCheck, UserPlus } from "lucide-react";
@@ -81,10 +81,14 @@ export default function LoginPage() {
     );
   }, []);
 
-  useEffect(() => {
+  // Toggling the tabs always wipes the previous run's status messages —
+  // doing it inline (instead of in a useEffect) keeps render pure and
+  // satisfies react-hooks/set-state-in-effect.
+  function switchMode(m: Mode) {
+    setMode(m);
     setErr(null);
     setInfo(null);
-  }, [mode]);
+  }
 
   async function handleLogin() {
     setBusy(true);
@@ -162,7 +166,7 @@ export default function LoginPage() {
         <div className="grid grid-cols-2 gap-1 mb-4 p-1 rounded-md bg-panel/60 border border-border/60">
           <button
             type="button"
-            onClick={() => setMode("login")}
+            onClick={() => switchMode("login")}
             className={`text-xs py-1.5 rounded-sm ${
               mode === "login" ? "bg-bg/80 text-text" : "text-muted hover:text-text"
             }`}
@@ -171,7 +175,7 @@ export default function LoginPage() {
           </button>
           <button
             type="button"
-            onClick={() => setMode("register")}
+            onClick={() => switchMode("register")}
             className={`text-xs py-1.5 rounded-sm ${
               mode === "register" ? "bg-bg/80 text-text" : "text-muted hover:text-text"
             }`}
@@ -245,7 +249,7 @@ export default function LoginPage() {
               First time on this device? Switch to{" "}
               <button
                 type="button"
-                onClick={() => setMode("register")}
+                onClick={() => switchMode("register")}
                 className="underline hover:text-text"
               >
                 Register passkey
@@ -257,7 +261,7 @@ export default function LoginPage() {
               Already enrolled on this device? Switch to{" "}
               <button
                 type="button"
-                onClick={() => setMode("login")}
+                onClick={() => switchMode("login")}
                 className="underline hover:text-text"
               >
                 Sign in
