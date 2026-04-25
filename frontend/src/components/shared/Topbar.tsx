@@ -16,7 +16,6 @@ export default function Topbar() {
   const [authed, setAuthed] = useState<boolean>(false);
 
   useEffect(() => {
-    setAuthed(!!getAccessToken());
     let cancelled = false;
     const pull = async () => {
       try {
@@ -28,6 +27,12 @@ export default function Topbar() {
         if (!cancelled) setNewCount(null);
       }
     };
+    // `getAccessToken()` is a synchronous localStorage read; deferring the
+    // resulting `setAuthed` keeps the initial render pure (and silences
+    // react-hooks/set-state-in-effect).
+    const kickAuth = runDeferred(() => {
+      if (!cancelled) setAuthed(!!getAccessToken());
+    });
     const kick = runDeferred(() => {
       void pull();
     });
@@ -40,6 +45,7 @@ export default function Topbar() {
     window.addEventListener("storage", onStorage);
     return () => {
       cancelled = true;
+      clearTimeout(kickAuth);
       clearTimeout(kick);
       clearInterval(t);
       window.removeEventListener("storage", onStorage);
