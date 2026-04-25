@@ -71,6 +71,15 @@ services:
       - ../../backend:/app
       - ../../ml/artifacts:/app/ml/artifacts:ro
     command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info", "--concurrency=4", "-Q", "recon,siem,ids,celery"]
+    # Override the backend image's HTTP healthcheck — workers don't expose HTTP.
+    # `celery inspect ping` round-trips through the broker and only succeeds when
+    # the worker is actually consuming.
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app inspect ping -d celery@$$(hostname) >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
   frontend:
     build:
@@ -78,6 +87,11 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file: ../../.env
+    # Inside the Docker network the Next.js server proxies /api/v1/* via this
+    # internal target; the browser still uses NEXT_PUBLIC_API_URL/_WS_URL from
+    # `.env` to reach the backend through the host's published ports.
+    environment:
+      INTERNAL_API_URL: http://backend:8000
     depends_on:
       - backend
     volumes:
