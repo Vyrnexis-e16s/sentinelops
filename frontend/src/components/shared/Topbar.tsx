@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { Bell, Search } from "lucide-react";
+import { Bell, KeyRound, LogOut, Search } from "lucide-react";
 import { api, type Alert, type Paginated } from "@/lib/api";
+import { clearAccessToken, getAccessToken } from "@/lib/auth";
 import { runDeferred } from "@/lib/schedule-deferred";
 import { PALETTE_OPEN_EVENT } from "@/components/shared/CommandPalette";
 import ThemeSwitch from "./ThemeSwitch";
@@ -12,8 +13,10 @@ const POLL_MS = 30000;
 
 export default function Topbar() {
   const [newCount, setNewCount] = useState<number | null>(null);
+  const [authed, setAuthed] = useState<boolean>(false);
 
   useEffect(() => {
+    setAuthed(!!getAccessToken());
     let cancelled = false;
     const pull = async () => {
       try {
@@ -29,16 +32,29 @@ export default function Topbar() {
       void pull();
     });
     const t = setInterval(() => void pull(), POLL_MS);
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "sentinelops_access_token") {
+        setAuthed(!!getAccessToken());
+      }
+    };
+    window.addEventListener("storage", onStorage);
     return () => {
       cancelled = true;
       clearTimeout(kick);
       clearInterval(t);
+      window.removeEventListener("storage", onStorage);
     };
   }, []);
 
   const openPalette = () => {
     if (typeof window === "undefined") return;
     window.dispatchEvent(new CustomEvent(PALETTE_OPEN_EVENT));
+  };
+
+  const onSignOut = () => {
+    clearAccessToken();
+    setAuthed(false);
+    window.location.href = "/login";
   };
 
   return (
@@ -78,6 +94,28 @@ export default function Topbar() {
             </span>
           )}
         </Link>
+        {authed ? (
+          <button
+            type="button"
+            onClick={onSignOut}
+            className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md border border-border/60 hover:border-accent/60 hover:text-text"
+            aria-label="Sign out"
+            title="Sign out (clears access token)"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Sign out</span>
+          </button>
+        ) : (
+          <Link
+            href="/login"
+            className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-md border border-accent/60 text-accent hover:bg-accent/10"
+            aria-label="Sign in with passkey"
+            title="Sign in or register a passkey"
+          >
+            <KeyRound className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">Sign in</span>
+          </Link>
+        )}
         <ThemeSwitch />
       </div>
     </header>
