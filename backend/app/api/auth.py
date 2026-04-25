@@ -14,6 +14,8 @@ from app.schemas.auth import (
     LoginBegin,
     LoginBeginResponse,
     LoginFinish,
+    PasswordLogin,
+    PasswordRegister,
     RegisterBegin,
     RegisterBeginResponse,
     RegisterFinish,
@@ -90,6 +92,46 @@ async def login_finish(
     await audit.append(
         actor_id=user.id,
         action="auth.login",
+        resource_type="user",
+        resource_id=str(user.id),
+    )
+    await svc.db.commit()
+    token = create_access_token(user.id)
+    return TokenResponse(access_token=token, expires_in=settings.jwt_expire_minutes * 60)
+
+
+@router.post("/password/register", response_model=TokenResponse)
+async def password_register(
+    payload: PasswordRegister,
+    svc: AuthService = Depends(_service),
+    audit: AuditService = Depends(audit_logger),
+) -> TokenResponse:
+    """Self-service signup with email + password. Returns a JWT immediately
+    so the caller is logged in on success.
+    """
+    user = await svc.password_register(payload.email, payload.password, payload.display_name)
+    await audit.append(
+        actor_id=user.id,
+        action="auth.password.register",
+        resource_type="user",
+        resource_id=str(user.id),
+        metadata={"email": payload.email},
+    )
+    await svc.db.commit()
+    token = create_access_token(user.id)
+    return TokenResponse(access_token=token, expires_in=settings.jwt_expire_minutes * 60)
+
+
+@router.post("/password/login", response_model=TokenResponse)
+async def password_login(
+    payload: PasswordLogin,
+    svc: AuthService = Depends(_service),
+    audit: AuditService = Depends(audit_logger),
+) -> TokenResponse:
+    user = await svc.password_login(payload.email, payload.password)
+    await audit.append(
+        actor_id=user.id,
+        action="auth.password.login",
         resource_type="user",
         resource_id=str(user.id),
     )

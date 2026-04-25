@@ -32,6 +32,7 @@ from webauthn.helpers.structs import (
 from app.core.config import settings
 from app.core.errors import AuthError, ConflictError, NotFoundError
 from app.core.logging import get_logger
+from app.core.passwords import hash_password, needs_rehash, verify_password
 from app.models.user import User
 from app.models.webauthn import WebAuthnCredential
 
@@ -195,6 +196,58 @@ class AuthService:
         )
         opts_json: dict[str, Any] = json.loads(options_to_json(options))
         return opts_json, challenge_id
+
+    # ------------------------------------------------------------------ #
+    # Password (email + password fallback)                                #
+    # ------------------------------------------------------------------ #
+
+    async def password_register(self, email: str, password: str, display_name: str) -> User:
+        """Create a user with a hashed password, or set the password on an
+        existing passkey-only account. Idempotent enough to use as a "first
+        time setup" call: if the email already has a password, raises.
+        """
+        result = await self.db.execute(select(User).where(User.email == email))
+        user = result.scalar_one_or_none()
+        if user is None:
+            user = User(
+                id=uuid.uuid4(),
+                email=email,
+                display_name=display_name,
+                is_active=True,
+                password_hash=hash_password(password),
+            )
+            self.db.add(user)
+            await self.db.flush()
+            return user
+        if not user.is_active:
+            raise ConflictError("User exists but is inactive")
+        if user.password_hash:
+            raise ConflictError(
+                "Email already has a password set; use the sign-in form instead."
+            )
+        user.password_hash = hash_password(password)
+        if display_name and display_name != user.display_name:
+            user.display_name = display_name
+        await self.db.flush()
+        return user
+
+    async def password_login(self, email: str, password: str) -> User:
+        """Verify ``email``/``password``; on success, transparently rehash if
+        the stored Argon2 parameters have since been strengthened.
+        """
+        result = await self.db.execute(select(User).where(User.email == email))
+        user = result.scalar_one_or_none()
+        # Constant-ish work: never short-circuit before touching argon2 so
+        # response times don't reveal which of the two checks failed.
+        if user is None or not user.is_active or not user.password_hash:
+            verify_password(password, None)
+            raise AuthError("Invalid email or password")
+        if not verify_password(password, user.password_hash):
+            raise AuthError("Invalid email or password")
+        if needs_rehash(user.password_hash):
+            user.password_hash = hash_password(password)
+            await self.db.flush()
+        return user
 
     async def login_finish(self, challenge_id: str, credential: dict[str, Any]) -> User:
         record = await _pop_challenge(self.redis, challenge_id)

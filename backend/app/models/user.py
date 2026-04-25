@@ -16,6 +16,9 @@ class User(Base):
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     email: Mapped[str] = mapped_column(String(320), unique=True, nullable=False, index=True)
     display_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    # Argon2id digest. Nullable because a user may exist with passkeys only
+    # (registered via /webauthn/register/begin) and never set a password.
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         nullable=False, default=lambda: datetime.now(tz=timezone.utc)
     )
