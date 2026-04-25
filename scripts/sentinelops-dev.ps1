@@ -4,12 +4,19 @@
   Runs on Windows PowerShell 3.0+ and PowerShell 7+ (pwsh). No #Requires line so older
   hosts can at least show a clear error from the version check below.
 
-  Usage:
+  Usage (setup / run):
     .\scripts\sentinelops-dev.ps1                    # full: venv + npm + docker compose (required)
     .\scripts\sentinelops-dev.ps1 -Mode local        # venv + npm only (no Docker — for partial work)
     .\scripts\sentinelops-dev.ps1 -Mode docker       # only: docker compose up -d --build
-    .\scripts\sentinelops-dev.ps1 -TryUpgradePython   # also: winget upgrade for installed Python
-    .\scripts\sentinelops-dev.ps1 -NoWingetPython     # skip auto winget install/upgrade of Python
+    .\scripts\sentinelops-dev.ps1 -TryUpgradePython  # also: winget upgrade for installed Python
+    .\scripts\sentinelops-dev.ps1 -NoWingetPython    # skip auto winget install/upgrade of Python
+
+  Lifecycle commands (instead of setup):
+    .\scripts\sentinelops-dev.ps1 -Restart           # bounce every running container
+    .\scripts\sentinelops-dev.ps1 -Stop              # stop & remove containers (volumes preserved)
+    .\scripts\sentinelops-dev.ps1 -Status            # show docker compose ps for the stack
+    .\scripts\sentinelops-dev.ps1 -Logs              # tail last 200 lines of every service
+    .\scripts\sentinelops-dev.ps1 -Help              # show full help
 
   Logs: logs/sentinelops-dev-<timestamp>.log
 #>
@@ -17,10 +24,50 @@ param(
   [ValidateSet("full", "local", "docker")]
   [string] $Mode = "full",
   [switch] $TryUpgradePython,
-  [switch] $NoWingetPython
+  [switch] $NoWingetPython,
+  [switch] $Restart,
+  [switch] $Stop,
+  [switch] $Status,
+  [switch] $Logs,
+  [switch] $Help
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($Help) {
+@"
+SentinelOps dev runner — sentinelops-dev.ps1
+
+Usage:
+  .\scripts\sentinelops-dev.ps1 [SwitchOrCommand]
+
+Lifecycle commands (mutually exclusive, performed instead of setup):
+  -Restart     Bounce every running SentinelOps container (db, redis, backend, worker,
+               frontend) via 'docker compose restart' and wait for /health.
+  -Stop        Stop and remove all SentinelOps containers via 'docker compose down'.
+               Named volumes (Postgres data, Redis data) are preserved.
+  -Status      Show 'docker compose ps' for the project.
+  -Logs        Tail the last 200 lines of every service ('docker compose logs --tail 200').
+  -Help        Show this message and exit.
+
+Modes (default = setup):
+  -Mode full     venvs + npm + 'docker compose up -d --build' (default)
+  -Mode local    venvs + npm only (no Docker)
+  -Mode docker   only 'docker compose up -d --build'
+
+Other switches:
+  -TryUpgradePython   Run 'winget upgrade' for installed Python before continuing.
+  -NoWingetPython     Skip automatic 'winget install/upgrade' of Python.
+
+Examples:
+  .\scripts\sentinelops-dev.ps1                # full setup
+  .\scripts\sentinelops-dev.ps1 -Restart       # bounce the stack
+  .\scripts\sentinelops-dev.ps1 -Stop          # stop everything (data kept)
+  .\scripts\sentinelops-dev.ps1 -Status        # see what is running
+  .\scripts\sentinelops-dev.ps1 -Mode local    # venv + npm only
+"@ | Write-Host
+  exit 0
+}
 
 # --- PowerShell runtime: 3.0+ (Desktop) and 7+ (Core) both supported ---
 $psv = $PSVersionTable.PSVersion
@@ -190,6 +237,55 @@ $ef = Join-Path $RepoRoot ".env"
 if (-not (Test-Path $ef) -and (Test-Path $ex)) {
   Copy-Item $ex $ef
   Log "Created .env from .env.example"
+}
+
+function Wait-BackendHealth {
+  for ($i = 0; $i -lt 30; $i++) {
+    try {
+      $r = Invoke-WebRequest -UseBasicParsing -Uri "http://localhost:8000/health" -TimeoutSec 3 -ErrorAction Stop
+      if ($r.StatusCode -eq 200) {
+        Log "Backend /health: ok"
+        return
+      }
+    } catch { }
+    Start-Sleep -Seconds 2
+  }
+  Log "Backend /health did not return OK within ~60s (it may still be migrating). Check: docker compose -f infra/docker/docker-compose.yml logs backend" "WARN"
+}
+
+# --- lifecycle: -Stop / -Restart / -Status / -Logs (short-circuit setup) ---
+if ($Stop -or $Restart -or $Status -or $Logs) {
+  if (-not (Test-DockerEngine)) {
+    Log "Docker is not installed or the engine is not running. Start Docker Desktop, then retry." "ERROR"
+    exit 1
+  }
+  if ($Stop) {
+    Log "Stopping SentinelOps stack (docker compose down — volumes preserved)…"
+    $code = (Invoke-DockerCompose @("down"))
+    if ($code -ne 0) { Log "docker compose down failed (exit $code). See: $LogFile" "ERROR"; exit 1 }
+    Log "Stopped. Run '.\scripts\sentinelops-dev.ps1' to bring it back up."
+    exit 0
+  }
+  if ($Restart) {
+    if (-not (Test-SentinelopsComposeAllRunning)) {
+      Log "Stack is not fully running — bringing it up first."
+      $null = (Invoke-DockerCompose @("up", "-d"))
+    }
+    Log "Restarting every SentinelOps container (db, redis, backend, worker, frontend)…"
+    $code = (Invoke-DockerCompose @("restart"))
+    if ($code -ne 0) { Log "docker compose restart failed (exit $code). See: $LogFile" "ERROR"; exit 1 }
+    Wait-BackendHealth
+    Log "UI http://localhost:3000  |  API http://localhost:8000/docs"
+    exit 0
+  }
+  if ($Status) {
+    $null = (Invoke-DockerCompose @("ps"))
+    exit 0
+  }
+  if ($Logs) {
+    $null = (Invoke-DockerCompose @("logs", "--tail", "200", "--no-color"))
+    exit 0
+  }
 }
 
 # --- docker only ---

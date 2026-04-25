@@ -18,6 +18,36 @@ Two entry points (pick your OS):
 
 Logs are written under **`logs/sentinelops-dev-*.log`**.
 
+## Lifecycle commands
+
+The scripts also expose lifecycle commands that **short-circuit setup** — they only require a working Docker engine and act on the existing compose stack.
+
+| Command (Linux/WSL) | Command (PowerShell) | What it does |
+|---|---|---|
+| `--restart` | `-Restart` | `docker compose restart` for db, redis, backend, worker, frontend; then waits for `/health`. Equivalent to a clean bounce after a code or config change. |
+| `--stop` | `-Stop` | `docker compose down`. Containers are removed; **named volumes (Postgres, Redis) are preserved**, so data survives. |
+| `--status` | `-Status` | `docker compose ps` for the project — shows what's up and health states. |
+| `--logs` | `-Logs` | Tails the last 200 lines of every service (`docker compose logs --tail 200`). |
+| `--help` / `-h` | `-Help` | Print full help and exit. |
+
+Examples:
+
+```bash
+# Linux / WSL
+./scripts/sentinelops-dev.sh --help
+./scripts/sentinelops-dev.sh --restart
+./scripts/sentinelops-dev.sh --stop
+./scripts/sentinelops-dev.sh --status
+```
+
+```powershell
+# Windows PowerShell / pwsh
+.\scripts\sentinelops-dev.ps1 -Help
+.\scripts\sentinelops-dev.ps1 -Restart
+.\scripts\sentinelops-dev.ps1 -Stop
+.\scripts\sentinelops-dev.ps1 -Status
+```
+
 ## Modes
 
 ### Windows (`sentinelops-dev.ps1`)

@@ -3,12 +3,66 @@
 # Usage:
 #   chmod +x scripts/sentinelops-dev.sh
 #   ./scripts/sentinelops-dev.sh                # full: venv + node + docker compose (Docker required)
+#   ./scripts/sentinelops-dev.sh --restart      # bounce the running stack (db, redis, backend, worker, frontend)
+#   ./scripts/sentinelops-dev.sh --stop         # stop & remove containers (volumes preserved)
+#   ./scripts/sentinelops-dev.sh --help         # list every command
 #   MODE=local ./scripts/sentinelops-dev.sh     # venv + node only
-#   MODE=docker ./scripts/sentinelops-dev.sh   # only: docker compose up -d --build
+#   MODE=docker ./scripts/sentinelops-dev.sh    # only: docker compose up -d --build
 #   SENTINELOPS_APT_INSTALL=1 ./scripts/sentinelops-dev.sh   # apt (sudo) when Python 3.11+ missing — only for the apt step, not the whole script
 # WSL (Ubuntu, Kali, Debian, etc.): same script — from Linux: cd to repo, ./scripts/sentinelops-dev.sh  (or ./scripts/sentinelops-wsl.sh)
 # Do NOT run the whole script with sudo; it breaks venv/node ownership. Use a normal user; PEP 668 distros (Kali/Debian) are handled.
 set -euo pipefail
+
+ACTION="run"
+for arg in "$@"; do
+  case "$arg" in
+    --help|-h)    ACTION="help" ;;
+    --stop)       ACTION="stop" ;;
+    --restart)    ACTION="restart" ;;
+    --status|--ps) ACTION="status" ;;
+    --logs)       ACTION="logs" ;;
+    *) ;;  # unknown flags are ignored to stay forward-compatible
+  esac
+done
+
+print_help() {
+  cat <<'HELP'
+SentinelOps dev runner — sentinelops-dev.sh
+
+Usage:
+  ./scripts/sentinelops-dev.sh [COMMAND]
+  MODE=<mode> ./scripts/sentinelops-dev.sh   (no command = run/setup)
+
+Commands (mutually exclusive, performed instead of setup):
+  --restart    Restart every running container (db, redis, backend, worker, frontend)
+               via "docker compose restart" and wait for /health to come back.
+  --stop       Stop and remove all SentinelOps containers via "docker compose down".
+               Named volumes (Postgres data, Redis data) are preserved.
+  --status     Show "docker compose ps" for the project.
+  --logs       Tail the last 200 lines of every service ("docker compose logs --tail 200").
+  --help, -h   Show this message and exit.
+
+Modes (default = setup; MODE env var):
+  MODE=full     venvs + Node + "docker compose up -d --build"   (default)
+  MODE=local    venvs + Node only (no Docker)
+  MODE=docker   only "docker compose up -d --build"
+
+Environment knobs:
+  SENTINELOPS_APT_INSTALL=1   apt-get (sudo) Python 3.12+ when missing on Debian/Kali/Ubuntu.
+
+Examples:
+  ./scripts/sentinelops-dev.sh                 # full setup
+  ./scripts/sentinelops-dev.sh --restart       # bounce the stack
+  ./scripts/sentinelops-dev.sh --stop          # stop everything (data kept)
+  ./scripts/sentinelops-dev.sh --status        # see what is running
+  MODE=local ./scripts/sentinelops-dev.sh      # venv + node only
+HELP
+}
+
+if [[ "$ACTION" == "help" ]]; then
+  print_help
+  exit 0
+fi
 
 MODE="${MODE:-full}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -68,6 +122,78 @@ run_compose_or_skip() {
   log "docker compose up -d --build (starting or rebuilding stack)"
   docker_compose up -d --build
 }
+
+# ---------------------------------------------------------------------------
+# Lifecycle commands (--stop / --restart / --status / --logs)
+# These short-circuit the setup pipeline; they only need a working Docker.
+# ---------------------------------------------------------------------------
+require_docker() {
+  if ! command -v docker >/dev/null 2>&1; then
+    logerr "Docker is not installed. https://docs.docker.com/engine/install/"
+    return 1
+  fi
+  if ! docker info >/dev/null 2>&1; then
+    logerr "Docker engine is not running. Start the Docker service / Docker Desktop, then retry."
+    return 1
+  fi
+  return 0
+}
+
+wait_for_backend_health() {
+  local tries=30
+  for _ in $(seq 1 "$tries"); do
+    if curl -sf http://localhost:8000/health >/dev/null 2>&1; then
+      log "Backend /health: ok"
+      return 0
+    fi
+    sleep 2
+  done
+  log "Backend /health did not return OK within ~60s (it may still be migrating). Check: docker compose -f infra/docker/docker-compose.yml logs backend" "WARN"
+  return 0
+}
+
+if [[ "$ACTION" == "stop" ]]; then
+  require_docker || exit 1
+  log "Stopping SentinelOps stack (docker compose down — volumes preserved)…"
+  docker_compose down 2>&1 | tee -a "$LOG_FILE"
+  rc="${PIPESTATUS[0]}"
+  if [[ "$rc" -ne 0 ]]; then
+    logerr "docker compose down failed (exit $rc). See: $LOG_FILE"
+    exit 1
+  fi
+  log "Stopped. Run './scripts/sentinelops-dev.sh' to bring it back up."
+  exit 0
+fi
+
+if [[ "$ACTION" == "restart" ]]; then
+  require_docker || exit 1
+  if ! compose_all_running; then
+    log "Stack is not fully running — bringing it up first."
+    docker_compose up -d 2>&1 | tee -a "$LOG_FILE"
+  fi
+  log "Restarting every SentinelOps container (db, redis, backend, worker, frontend)…"
+  docker_compose restart 2>&1 | tee -a "$LOG_FILE"
+  rc="${PIPESTATUS[0]}"
+  if [[ "$rc" -ne 0 ]]; then
+    logerr "docker compose restart failed (exit $rc). See: $LOG_FILE"
+    exit 1
+  fi
+  wait_for_backend_health
+  log "UI http://localhost:3000  |  API http://localhost:8000/docs"
+  exit 0
+fi
+
+if [[ "$ACTION" == "status" ]]; then
+  require_docker || exit 1
+  docker_compose ps
+  exit 0
+fi
+
+if [[ "$ACTION" == "logs" ]]; then
+  require_docker || exit 1
+  docker_compose logs --tail 200 --no-color
+  exit 0
+fi
 
 if [[ "$MODE" == "docker" ]]; then
   if ! command -v docker >/dev/null 2>&1; then
