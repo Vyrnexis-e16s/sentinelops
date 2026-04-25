@@ -29,6 +29,7 @@ param(
   [switch] $Stop,
   [switch] $Status,
   [switch] $Logs,
+  [switch] $All,
   [switch] $Help
 )
 
@@ -41,14 +42,20 @@ SentinelOps dev runner — sentinelops-dev.ps1
 Usage:
   .\scripts\sentinelops-dev.ps1 [SwitchOrCommand]
 
-Lifecycle commands (mutually exclusive, performed instead of setup):
-  -Restart     Bounce every running SentinelOps container (db, redis, backend, worker,
-               frontend) via 'docker compose restart' and wait for /health.
-  -Stop        Stop and remove all SentinelOps containers via 'docker compose down'.
-               Named volumes (Postgres data, Redis data) are preserved.
-  -Status      Show 'docker compose ps' for the project.
-  -Logs        Tail the last 200 lines of every service ('docker compose logs --tail 200').
-  -Help        Show this message and exit.
+Lifecycle commands:
+  -All        Full bring-up: venvs + npm + force-rebuild Docker stack
+              (docker compose up -d --build --force-recreate) + run dev seed.
+              Use this for a clean, "everything ready" first-time start.
+  -Restart    Apply code/config changes: docker compose up -d --build
+              --force-recreate for every service, then wait for /health.
+              Rebuilds images that changed and recreates containers so
+              volume-mounted source updates are picked up.
+  -Stop       Stop and remove all SentinelOps containers via
+              'docker compose down'. Named volumes (Postgres / Redis data)
+              are preserved.
+  -Status     Show 'docker compose ps' for the project.
+  -Logs       Tail the last 200 lines of every service.
+  -Help       Show this message and exit.
 
 Modes (default = setup):
   -Mode full     venvs + npm + 'docker compose up -d --build' (default)
@@ -60,11 +67,11 @@ Other switches:
   -NoWingetPython     Skip automatic 'winget install/upgrade' of Python.
 
 Examples:
-  .\scripts\sentinelops-dev.ps1                # full setup
-  .\scripts\sentinelops-dev.ps1 -Restart       # bounce the stack
+  .\scripts\sentinelops-dev.ps1                # full setup (skip rebuild if already running)
+  .\scripts\sentinelops-dev.ps1 -All           # full setup + force rebuild + seed
+  .\scripts\sentinelops-dev.ps1 -Restart       # bounce the stack and pick up code changes
   .\scripts\sentinelops-dev.ps1 -Stop          # stop everything (data kept)
   .\scripts\sentinelops-dev.ps1 -Status        # see what is running
-  .\scripts\sentinelops-dev.ps1 -Mode local    # venv + npm only
 "@ | Write-Host
   exit 0
 }
@@ -220,12 +227,32 @@ function Test-SentinelopsComposeAllRunning {
 }
 
 function Start-SentinelopsCompose {
+  if ($script:ForceBuild) {
+    Log "docker compose up -d --build --force-recreate (-All: forced fresh start)"
+    return (Invoke-DockerCompose @("up", "-d", "--build", "--force-recreate"))
+  }
   if (Test-SentinelopsComposeAllRunning) {
     Log "Docker / Docker Compose: stack for $ComposeFile is already up (all services running). Skipping: docker compose up -d --build"
     return 0
   }
   Log "docker compose up -d --build (starting or rebuilding stack)"
   return (Invoke-DockerCompose @("up", "-d", "--build"))
+}
+
+function Invoke-SentinelopsSeed {
+  Log "Seeding development data (docker compose exec backend python -m app.scripts.seed)…"
+  $code = (Invoke-DockerCompose @("exec", "-T", "backend", "python", "-m", "app.scripts.seed"))
+  if ($code -ne 0) {
+    Log "seed exited $code (often OK on re-run when data already exists)" "WARN"
+  }
+}
+
+# -All implies force-rebuild + seed at the end of the full pipeline.
+$script:ForceBuild = $false
+$script:RunSeed = $false
+if ($All) {
+  $script:ForceBuild = $true
+  $script:RunSeed = $true
 }
 
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
@@ -267,13 +294,10 @@ if ($Stop -or $Restart -or $Status -or $Logs) {
     exit 0
   }
   if ($Restart) {
-    if (-not (Test-SentinelopsComposeAllRunning)) {
-      Log "Stack is not fully running — bringing it up first."
-      $null = (Invoke-DockerCompose @("up", "-d"))
-    }
-    Log "Restarting every SentinelOps container (db, redis, backend, worker, frontend)…"
-    $code = (Invoke-DockerCompose @("restart"))
-    if ($code -ne 0) { Log "docker compose restart failed (exit $code). See: $LogFile" "ERROR"; exit 1 }
+    Log "Restarting SentinelOps stack: docker compose up -d --build --force-recreate"
+    Log "  (rebuilds images that changed; recreates every container so volume-mounted source is reread)"
+    $code = (Invoke-DockerCompose @("up", "-d", "--build", "--force-recreate"))
+    if ($code -ne 0) { Log "docker compose up failed (exit $code). See: $LogFile" "ERROR"; exit 1 }
     Wait-BackendHealth
     Log "UI http://localhost:3000  |  API http://localhost:8000/docs"
     exit 0
@@ -421,6 +445,10 @@ if ($Mode -eq "full") {
   if ($dc -ne 0) {
     Log "docker compose failed (exit $dc). See log: $LogFile" "ERROR"
     exit 1
+  }
+  if ($script:RunSeed) {
+    Wait-BackendHealth
+    Invoke-SentinelopsSeed
   }
   Log "Stack is up. UI http://localhost:3000  |  API http://localhost:8000/docs"
   Log "Seed development data: docker compose -f infra/docker/docker-compose.yml exec backend python -m app.scripts.seed"

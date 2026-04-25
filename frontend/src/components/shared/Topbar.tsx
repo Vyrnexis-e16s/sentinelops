@@ -4,7 +4,12 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { Bell, KeyRound, LogOut, Search } from "lucide-react";
 import { api, type Alert, type Paginated } from "@/lib/api";
-import { clearAccessToken, getAccessToken } from "@/lib/auth";
+import {
+  AUTH_CHANGED_EVENT,
+  clearAccessToken,
+  getAccessToken,
+  type AuthChangedDetail
+} from "@/lib/auth";
 import { runDeferred } from "@/lib/schedule-deferred";
 import { PALETTE_OPEN_EVENT } from "@/components/shared/CommandPalette";
 import ThemeSwitch from "./ThemeSwitch";
@@ -37,18 +42,33 @@ export default function Topbar() {
       void pull();
     });
     const t = setInterval(() => void pull(), POLL_MS);
+    // Cross-tab change (signed in/out from another tab/window)
     const onStorage = (e: StorageEvent) => {
       if (e.key === "sentinelops_access_token") {
-        setAuthed(!!getAccessToken());
+        const next = !!getAccessToken();
+        setAuthed(next);
+        if (next) void pull();
       }
     };
+    // Same-tab change (sign-in / sign-out happened right here)
+    const onAuthChanged = (e: Event) => {
+      const detail = (e as CustomEvent<AuthChangedDetail>).detail;
+      const next = detail?.hasToken ?? !!getAccessToken();
+      setAuthed(next);
+      // Refresh the alert badge immediately so it goes from null -> count
+      // (or count -> null on sign-out) without waiting for the next poll tick.
+      if (next) void pull();
+      else setNewCount(null);
+    };
     window.addEventListener("storage", onStorage);
+    window.addEventListener(AUTH_CHANGED_EVENT, onAuthChanged);
     return () => {
       cancelled = true;
       clearTimeout(kickAuth);
       clearTimeout(kick);
       clearInterval(t);
       window.removeEventListener("storage", onStorage);
+      window.removeEventListener(AUTH_CHANGED_EVENT, onAuthChanged);
     };
   }, []);
 

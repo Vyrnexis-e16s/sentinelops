@@ -14,13 +14,16 @@
 set -euo pipefail
 
 ACTION="run"
+FORCE_BUILD=0
+RUN_SEED=0
 for arg in "$@"; do
   case "$arg" in
-    --help|-h)    ACTION="help" ;;
-    --stop)       ACTION="stop" ;;
-    --restart)    ACTION="restart" ;;
+    --help|-h)     ACTION="help" ;;
+    --stop)        ACTION="stop" ;;
+    --restart)     ACTION="restart" ;;
     --status|--ps) ACTION="status" ;;
-    --logs)       ACTION="logs" ;;
+    --logs)        ACTION="logs" ;;
+    --all)         ACTION="run"; FORCE_BUILD=1; RUN_SEED=1 ;;
     *) ;;  # unknown flags are ignored to stay forward-compatible
   esac
 done
@@ -33,13 +36,19 @@ Usage:
   ./scripts/sentinelops-dev.sh [COMMAND]
   MODE=<mode> ./scripts/sentinelops-dev.sh   (no command = run/setup)
 
-Commands (mutually exclusive, performed instead of setup):
-  --restart    Restart every running container (db, redis, backend, worker, frontend)
-               via "docker compose restart" and wait for /health to come back.
-  --stop       Stop and remove all SentinelOps containers via "docker compose down".
-               Named volumes (Postgres data, Redis data) are preserved.
+Lifecycle commands:
+  --all        Full bring-up: venvs + Node + force-rebuild Docker stack
+               (docker compose up -d --build --force-recreate) + run dev seed.
+               Use this for a clean, "everything ready" first-time start.
+  --restart    Apply code/config changes: docker compose up -d --build
+               --force-recreate for every service, then wait for /health.
+               This rebuilds images that changed and recreates containers
+               so volume-mounted source updates are picked up.
+  --stop       Stop and remove all SentinelOps containers via
+               "docker compose down". Named volumes (Postgres / Redis data)
+               are preserved, so data survives.
   --status     Show "docker compose ps" for the project.
-  --logs       Tail the last 200 lines of every service ("docker compose logs --tail 200").
+  --logs       Tail the last 200 lines of every service.
   --help, -h   Show this message and exit.
 
 Modes (default = setup; MODE env var):
@@ -51,8 +60,9 @@ Environment knobs:
   SENTINELOPS_APT_INSTALL=1   apt-get (sudo) Python 3.12+ when missing on Debian/Kali/Ubuntu.
 
 Examples:
-  ./scripts/sentinelops-dev.sh                 # full setup
-  ./scripts/sentinelops-dev.sh --restart       # bounce the stack
+  ./scripts/sentinelops-dev.sh                 # full setup (skip rebuild if already running)
+  ./scripts/sentinelops-dev.sh --all           # full setup + force rebuild + seed
+  ./scripts/sentinelops-dev.sh --restart       # bounce the stack and pick up code changes
   ./scripts/sentinelops-dev.sh --stop          # stop everything (data kept)
   ./scripts/sentinelops-dev.sh --status        # see what is running
   MODE=local ./scripts/sentinelops-dev.sh      # venv + node only
@@ -115,12 +125,23 @@ compose_all_running() {
 }
 
 run_compose_or_skip() {
+  if [[ "${FORCE_BUILD:-0}" -eq 1 ]]; then
+    log "docker compose up -d --build --force-recreate (--all: forced fresh start)"
+    docker_compose up -d --build --force-recreate
+    return $?
+  fi
   if compose_all_running; then
     log "Docker / Docker Compose: stack is already up (all services running). Skipping: docker compose up -d --build"
     return 0
   fi
   log "docker compose up -d --build (starting or rebuilding stack)"
   docker_compose up -d --build
+}
+
+run_seed() {
+  log "Seeding development data (docker compose exec backend python -m app.scripts.seed)…"
+  docker_compose exec -T backend python -m app.scripts.seed 2>&1 | tee -a "$LOG_FILE" || \
+    log "seed exited non-zero (often OK on re-run when data already exists)" "WARN"
 }
 
 # ---------------------------------------------------------------------------
@@ -167,15 +188,12 @@ fi
 
 if [[ "$ACTION" == "restart" ]]; then
   require_docker || exit 1
-  if ! compose_all_running; then
-    log "Stack is not fully running — bringing it up first."
-    docker_compose up -d 2>&1 | tee -a "$LOG_FILE"
-  fi
-  log "Restarting every SentinelOps container (db, redis, backend, worker, frontend)…"
-  docker_compose restart 2>&1 | tee -a "$LOG_FILE"
+  log "Restarting SentinelOps stack: docker compose up -d --build --force-recreate"
+  log "  (rebuilds images that changed; recreates every container so volume-mounted source is reread)"
+  docker_compose up -d --build --force-recreate 2>&1 | tee -a "$LOG_FILE"
   rc="${PIPESTATUS[0]}"
   if [[ "$rc" -ne 0 ]]; then
-    logerr "docker compose restart failed (exit $rc). See: $LOG_FILE"
+    logerr "docker compose up failed (exit $rc). See: $LOG_FILE"
     exit 1
   fi
   wait_for_backend_health
@@ -363,6 +381,10 @@ if [[ "$MODE" == "full" ]]; then
   if [[ "$dce" -ne 0 ]]; then
     logerr "docker compose failed (exit $dce). See: $LOG_FILE"
     exit 1
+  fi
+  if [[ "${RUN_SEED:-0}" -eq 1 ]]; then
+    wait_for_backend_health
+    run_seed
   fi
   log "UI http://localhost:3000  —  seed: docker compose -f infra/docker/docker-compose.yml exec backend python -m app.scripts.seed"
 fi

@@ -20,12 +20,13 @@ Logs are written under **`logs/sentinelops-dev-*.log`**.
 
 ## Lifecycle commands
 
-The scripts also expose lifecycle commands that **short-circuit setup** — they only require a working Docker engine and act on the existing compose stack.
+The scripts expose lifecycle commands. `--all` and `--restart` go through the **same setup pipeline** as the default invocation but force a rebuild; `--stop`, `--status`, and `--logs` short-circuit and only need Docker.
 
 | Command (Linux/WSL) | Command (PowerShell) | What it does |
 |---|---|---|
-| `--restart` | `-Restart` | `docker compose restart` for db, redis, backend, worker, frontend; then waits for `/health`. Equivalent to a clean bounce after a code or config change. |
-| `--stop` | `-Stop` | `docker compose down`. Containers are removed; **named volumes (Postgres, Redis) are preserved**, so data survives. |
+| `--all` | `-All` | Full bring-up: venvs + Node + `docker compose up -d --build --force-recreate` + run dev seed. Use for a clean, "everything-ready" first-time start. |
+| `--restart` | `-Restart` | `docker compose up -d --build --force-recreate` and wait for `/health`. **Rebuilds images that changed** and recreates every container so volume-mounted source is reread — this is the command to use after editing code or env. |
+| `--stop` | `-Stop` | `docker compose down`. Containers removed; **named volumes (Postgres, Redis) preserved**, so data survives. |
 | `--status` | `-Status` | `docker compose ps` for the project — shows what's up and health states. |
 | `--logs` | `-Logs` | Tails the last 200 lines of every service (`docker compose logs --tail 200`). |
 | `--help` / `-h` | `-Help` | Print full help and exit. |
@@ -35,7 +36,8 @@ Examples:
 ```bash
 # Linux / WSL
 ./scripts/sentinelops-dev.sh --help
-./scripts/sentinelops-dev.sh --restart
+./scripts/sentinelops-dev.sh --all          # one-shot fresh start (rebuild + seed)
+./scripts/sentinelops-dev.sh --restart      # apply code/config changes
 ./scripts/sentinelops-dev.sh --stop
 ./scripts/sentinelops-dev.sh --status
 ```
@@ -43,6 +45,7 @@ Examples:
 ```powershell
 # Windows PowerShell / pwsh
 .\scripts\sentinelops-dev.ps1 -Help
+.\scripts\sentinelops-dev.ps1 -All
 .\scripts\sentinelops-dev.ps1 -Restart
 .\scripts\sentinelops-dev.ps1 -Stop
 .\scripts\sentinelops-dev.ps1 -Status

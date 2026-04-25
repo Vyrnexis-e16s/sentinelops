@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import {
@@ -67,7 +67,18 @@ function errMsg(e: unknown): string {
   return "Unknown error";
 }
 
+// Next.js 16 requires `useSearchParams()` to be inside a <Suspense> boundary
+// during static export / prerender; wrapping the inner component fixes:
+//   "useSearchParams() should be wrapped in a suspense boundary at page /login"
 export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-[70vh] grid place-items-center text-muted text-sm">Loading…</div>}>
+      <LoginPageInner />
+    </Suspense>
+  );
+}
+
+function LoginPageInner() {
   const router = useRouter();
   const search = useSearchParams();
   const next = search.get("next") || "/dashboard";
