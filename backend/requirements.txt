@@ -42,6 +42,11 @@ dnspython==2.7.0
 # --- ML / IDS ---
 joblib==1.4.2
 numpy==2.1.2
+# pandas is required at inference time because the trained sklearn pipeline
+# uses ColumnTransformer with string column names, which only accepts a
+# pandas-like DataFrame as input (passing a raw list raises
+# "Specifying the columns using strings is only supported for dataframes").
+pandas==2.2.3
 scikit-learn==1.5.2
 
 # --- Observability ---

@@ -14,7 +14,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.db import get_session_factory
+from app.core.db import dispose_engine, get_session_factory
 from app.core.logging import get_logger
 from app.core.redis import init_redis
 from app.modules.recon.models import Finding, ReconJob
@@ -46,6 +46,28 @@ async def _set_status(db: AsyncSession, job_id: uuid.UUID, status: str) -> Recon
     return job
 
 
+async def _claim_for_run(db: AsyncSession, job_id: uuid.UUID) -> ReconJob | None:
+    """Idempotency guard: only proceed when the job is fresh (queued/failed).
+
+    Returns the job in 'running' state ready to execute, or None if another
+    worker has already finished or is currently running it. This makes
+    re-dispatch (e.g. after the rescue routine resurrects an orphan) safe —
+    duplicate deliveries are short-circuited without producing duplicate
+    findings.
+    """
+    job = await db.get(ReconJob, job_id)
+    if job is None:
+        return None
+    if job.status in {"running", "done"}:
+        log.info("recon.task.skip", job_id=str(job_id), reason=f"status={job.status}")
+        return None
+    job.status = "running"
+    if job.started_at is None:
+        job.started_at = datetime.now(tz=timezone.utc)
+    await db.flush()
+    return job
+
+
 async def _persist_findings(
     db: AsyncSession, job_id: uuid.UUID, findings: list[dict[str, Any]]
 ) -> int:
@@ -72,12 +94,13 @@ async def _persist_findings(
 
 
 async def _run_subdomain(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    await dispose_engine()  # bind engine to *this* asyncio.run loop
     factory = get_session_factory()
     wl = params.get("wordlist")
     async with factory() as db:
-        job = await _set_status(db, uuid.UUID(job_id), "running")
+        job = await _claim_for_run(db, uuid.UUID(job_id))
         if job is None:
-            return {"error": "missing_job"}
+            return {"error": "missing_or_already_handled"}
         try:
             hits = await enumerate_subdomains(target, wordlist=wl)
         except Exception as exc:  # noqa: BLE001
@@ -115,12 +138,13 @@ async def _run_subdomain(job_id: str, target: str, params: dict[str, Any]) -> di
 
 
 async def _run_portscan(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    await dispose_engine()
     factory = get_session_factory()
     ports = params.get("ports")
     async with factory() as db:
-        job = await _set_status(db, uuid.UUID(job_id), "running")
+        job = await _claim_for_run(db, uuid.UUID(job_id))
         if job is None:
-            return {"error": "missing_job"}
+            return {"error": "missing_or_already_handled"}
         try:
             results = await scan_host(target, ports=ports)
         except Exception as exc:  # noqa: BLE001
@@ -149,13 +173,14 @@ async def _run_portscan(job_id: str, target: str, params: dict[str, Any]) -> dic
 
 
 async def _run_cve(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    await dispose_engine()
     factory = get_session_factory()
     redis = await init_redis()
     cpe = params.get("cpe") or target
     async with factory() as db:
-        job = await _set_status(db, uuid.UUID(job_id), "running")
+        job = await _claim_for_run(db, uuid.UUID(job_id))
         if job is None:
-            return {"error": "missing_job"}
+            return {"error": "missing_or_already_handled"}
         try:
             summary = await query_cves(cpe, redis=redis)
         except Exception as exc:  # noqa: BLE001
@@ -184,13 +209,14 @@ async def _run_cve(job_id: str, target: str, params: dict[str, Any]) -> dict[str
 
 
 async def _run_webfuzz(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    await dispose_engine()
     factory = get_session_factory()
     wl = params.get("wordlist")
     base = target if target.startswith("http") else f"http://{target}"
     async with factory() as db:
-        job = await _set_status(db, uuid.UUID(job_id), "running")
+        job = await _claim_for_run(db, uuid.UUID(job_id))
         if job is None:
-            return {"error": "missing_job"}
+            return {"error": "missing_or_already_handled"}
         try:
             hits = await fuzz_paths(base, wordlist=wl)
         except Exception as exc:  # noqa: BLE001
@@ -241,3 +267,15 @@ def run_cve_job(job_id: str, target: str, params: dict[str, Any]) -> dict[str, A
 @celery_app.task(name="recon.webfuzz")
 def run_webfuzz_job(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
     return asyncio.run(_run_webfuzz(job_id, target, params or {}))
+
+
+@celery_app.task(name="recon.rescue")
+def rescue_orphans() -> dict[str, int]:
+    """Periodic + on-demand task: re-dispatch any recon job stuck in 'queued'.
+
+    Triggered every minute via beat (see ``celery_app.beat_schedule``) and
+    once on worker startup via the ``worker_ready`` signal handler.
+    """
+    from app.modules.recon.rescue import run_rescue_sync  # noqa: WPS433
+
+    return run_rescue_sync()

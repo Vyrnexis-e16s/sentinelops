@@ -192,6 +192,87 @@ async def get_job(
     return JobOut.model_validate(job)
 
 
+@router.post("/jobs/{job_id}/retry", response_model=JobOut)
+async def retry_job(
+    job_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(current_user),
+    audit: AuditService = Depends(audit_logger),
+) -> JobOut:
+    """Re-dispatch a recon job that's stuck queued or has previously failed.
+
+    Why this exists: if a worker or broker container is recreated mid-flight
+    (e.g. ``docker compose up --force-recreate``), a job's Celery message
+    can be lost while the DB row still says ``status='queued'``. Rather
+    than asking the user to delete and recreate the job, we expose this
+    explicit retry hook so they can recover with a single click.
+
+    Only the target's owner can retry. Jobs that are currently ``running``
+    are left alone — re-issuing them while the worker is mid-task would be
+    a footgun. The worker tasks themselves are now idempotent
+    (``_claim_for_run``) so even a duplicate delivery is safe.
+    """
+    job = await db.get(ReconJob, job_id)
+    if job is None:
+        raise NotFoundError("Job not found")
+    target = await db.get(Target, job.target_id)
+    if target is None or target.owner_id != user.id:
+        raise ForbiddenError("Not your job")
+
+    if job.status == "running":
+        raise ForbiddenError(
+            "Job is currently running. Wait for it to finish, or stop the worker first."
+        )
+
+    job.status = "queued"
+    job.started_at = None
+    job.finished_at = None
+    existing = job.result_json or {}
+    job.result_json = {
+        "params": existing.get("params", {}),
+        "retried_at": datetime.now(tz=timezone.utc).isoformat(),
+    }
+
+    try:
+        from app.modules.recon import workers  # noqa: WPS433
+
+        task_map = {
+            "subdomain": workers.run_subdomain_job,
+            "port": workers.run_portscan_job,
+            "cve": workers.run_cve_job,
+            "webfuzz": workers.run_webfuzz_job,
+        }
+        task = task_map.get(job.kind)
+        if task is None:
+            raise ValueError(f"Unknown recon kind '{job.kind}'")
+        async_result = task.delay(str(job.id), target.value, job.result_json["params"])
+        job.result_json = {
+            **(job.result_json or {}),
+            "celery_task_id": async_result.id,
+            "queue": "recon",
+        }
+    except Exception as exc:  # noqa: BLE001
+        log.warning("recon.retry_failed", job_id=str(job.id), error=str(exc))
+        job.status = "failed"
+        job.finished_at = datetime.now(tz=timezone.utc)
+        job.result_json = {
+            **(job.result_json or {}),
+            "error": "Failed to enqueue retry. Check Redis/Celery worker.",
+            "detail": str(exc),
+        }
+
+    await audit.append(
+        actor_id=user.id,
+        action="recon.job.retry",
+        resource_type="recon_job",
+        resource_id=str(job.id),
+        metadata={"kind": job.kind, "target": target.value, "status": job.status},
+    )
+    await db.commit()
+    await db.refresh(job)
+    return JobOut.model_validate(job)
+
+
 # --------------------------------------------------------------------------- #
 # Findings                                                                    #
 # --------------------------------------------------------------------------- #

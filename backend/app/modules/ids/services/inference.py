@@ -191,8 +191,14 @@ def predict(features: dict[str, Any], *, with_explain: bool = False) -> dict[str
     feature_list = bundle["feature_list"]
 
     row = _vectorise(features, feature_list)
-    pred = model.predict([row])[0]
-    proba = float(max(model.predict_proba([row])[0])) if hasattr(model, "predict_proba") else 1.0
+    # The trained pipeline uses ColumnTransformer with string column names,
+    # so the input must be a pandas DataFrame — sklearn refuses to accept a
+    # raw list of lists when columns are addressed by name.
+    import pandas as pd  # imported lazily so the import cost only hits the inference path
+
+    X = pd.DataFrame([row], columns=feature_list)
+    pred = model.predict(X)[0]
+    proba = float(max(model.predict_proba(X)[0])) if hasattr(model, "predict_proba") else 1.0
 
     pred_str = str(pred)
     label = "benign" if pred_str in ("normal", "benign", "0") else "attack"

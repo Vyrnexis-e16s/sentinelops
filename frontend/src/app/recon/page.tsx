@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { CheckCircle2, Loader2, Play, XCircle } from "lucide-react";
+import { CheckCircle2, Loader2, Play, RefreshCw, XCircle } from "lucide-react";
 import SectionHeader from "@/components/shared/SectionHeader";
 import {
   api,
@@ -321,7 +321,24 @@ export default function ReconPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <FindingsCard findings={findings} watchJobId={watchJobId} />
-        <JobsCard jobs={jobs} targetById={targetById} onPick={(id) => setWatchJobId(id)} />
+        <JobsCard
+          jobs={jobs}
+          targetById={targetById}
+          onPick={(id) => setWatchJobId(id)}
+          onRetry={async (id) => {
+            setError(null);
+            setInfo(null);
+            try {
+              const updated = await api.post<ReconJob>(`/api/v1/recon/jobs/${id}/retry`);
+              setWatchJobId(updated.id);
+              setInfo(`Re-dispatched ${updated.kind} job. Worker is picking it up — status updates below.`);
+              await loadLists();
+            } catch (e) {
+              const a = e as ApiError;
+              setError(a.detail || "Failed to retry job. Is the worker up?");
+            }
+          }}
+        />
       </div>
     </div>
   );
@@ -498,12 +515,24 @@ function FindingsCard({
 function JobsCard({
   jobs,
   targetById,
-  onPick
+  onPick,
+  onRetry
 }: {
   jobs: ReconJob[];
   targetById: Record<string, string>;
   onPick: (id: string) => void;
+  onRetry: (id: string) => Promise<void>;
 }) {
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+  const handleRetry = async (id: string) => {
+    setRetryingId(id);
+    try {
+      await onRetry(id);
+    } finally {
+      setRetryingId(null);
+    }
+  };
+
   return (
     <div className="glass rounded-xl p-4">
       <div className="text-sm font-semibold mb-3">Jobs</div>
@@ -514,6 +543,12 @@ function JobsCard({
           {jobs.map((j) => {
             const tv = targetById[j.target_id] || j.target_id.slice(0, 8);
             const active = j.status === "queued" || j.status === "running";
+            // A queued job that hasn't started after a few seconds is almost
+            // always orphaned (worker/broker recreate, lost message). Offer a
+            // retry button for those, and for any job that ended in failure.
+            const showRetry =
+              j.status === "failed" ||
+              (j.status === "queued" && !j.started_at);
             return (
               <li
                 key={j.id}
@@ -542,6 +577,29 @@ function JobsCard({
                 <span className={`ml-auto text-[11px] px-2 py-0.5 rounded-full ${statusPillClass(j.status)}`}>
                   {j.status}
                 </span>
+                {showRetry && (
+                  <button
+                    type="button"
+                    disabled={retryingId === j.id}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleRetry(j.id);
+                    }}
+                    title={
+                      j.status === "queued"
+                        ? "Stuck queued? Re-dispatch the job to the worker."
+                        : "Retry this failed job."
+                    }
+                    className="text-[11px] px-2 py-0.5 rounded-md border border-accent/40 text-accent hover:bg-accent/10 inline-flex items-center gap-1 disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {retryingId === j.id ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3 w-3" />
+                    )}
+                    Retry
+                  </button>
+                )}
                 {isTerminal(j.status) && (
                   <span className="basis-full text-[11px] text-muted pl-4">
                     {summariseResult(j)}

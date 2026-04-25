@@ -70,7 +70,18 @@ services:
     volumes:
       - ../../backend:/app
       - ../../ml/artifacts:/app/ml/artifacts:ro
-    command: ["celery", "-A", "app.workers.celery_app", "worker", "--loglevel=info", "--concurrency=4", "-Q", "recon,siem,ids,celery"]
+    # ``-B`` runs the beat scheduler embedded in this worker so the
+    # ``recon-rescue-orphans`` schedule (and any future periodic tasks) fires
+    # without needing a separate beat container in dev. ``-s /tmp/...``
+    # directs the schedule state file to a writable location inside the
+    # container so it can be created on each restart.
+    command:
+      [
+        "celery", "-A", "app.workers.celery_app",
+        "worker", "--loglevel=info", "--concurrency=4",
+        "-Q", "recon,siem,ids,celery",
+        "-B", "-s", "/tmp/celerybeat-schedule"
+      ]
     # Override the backend image's HTTP healthcheck — workers don't expose HTTP.
     # `celery inspect ping` round-trips through the broker and only succeeds when
     # the worker is actually consuming.
