@@ -24,7 +24,7 @@ from app.modules.siem.models import (
     ThreatIoc,
 )
 from app.modules.vault.models import VaultAccessGrant, VaultObject
-from app.modules.vapt.models import VaptBrief
+from app.modules.vapt.models import VaptAnalystFeedback, VaptBrief, VaptGraphEdge, VaptTtpMemory
 
 __all__ = [
     "Base",
@@ -43,5 +43,8 @@ __all__ = [
     "VaultObject",
     "VaultAccessGrant",
     "VaptBrief",
+    "VaptTtpMemory",
+    "VaptGraphEdge",
+    "VaptAnalystFeedback",
     "mapped_column",
 ]

@@ -21,7 +21,9 @@ class LlmUpstreamError(RuntimeError):
         self.status_code = status_code
 
 
-async def summarize_triage(*, context: str, instruction: str) -> tuple[str, str]:
+async def summarize_triage(
+    *, context: str, instruction: str, inject_mitre_context: bool = False
+) -> tuple[str, str]:
     if not (settings.openai_api_key or "").strip():
         raise LlmNotConfiguredError(
             "No LLM API key configured. Set OPENAI_API_KEY (or use an OpenAI-compatible "
@@ -32,10 +34,20 @@ async def summarize_triage(*, context: str, instruction: str) -> tuple[str, str]
     url = f"{base}/chat/completions"
     key = (settings.openai_api_key or "").strip()
 
+    sys_content = instruction
+    if inject_mitre_context:
+        from app.modules.vapt.mitre_data import mitre_addendum_for_prompt
+
+        addendum = mitre_addendum_for_prompt(max_lines=50)
+        sys_content = (
+            f"{instruction}\n\n---\nCurated MITRE ATT&CK technique reference (subset; align mentions to these when applicable):\n"
+            f"{addendum}"
+        )
+
     body = {
         "model": model,
         "messages": [
-            {"role": "system", "content": instruction},
+            {"role": "system", "content": sys_content},
             {
                 "role": "user",
                 "content": f"Data and findings from our security platform (JSON and text below):\n\n{context[:190_000]}",

@@ -29,6 +29,8 @@ The scripts expose lifecycle commands. `--all` and `--restart` go through the **
 | `--stop` | `-Stop` | `docker compose down`. Containers removed; **named volumes (Postgres, Redis) preserved**, so data survives. |
 | `--status` | `-Status` | `docker compose ps` for the project — shows what's up and health states. |
 | `--logs` | `-Logs` | Tails the last 200 lines of every service (`docker compose logs --tail 200`). |
+| `--migrate` | `-Migrate` | `docker compose exec backend alembic upgrade head` (apply DB migrations; requires running stack). |
+| `--smoke` | `-Smoke` | Runs `scripts/_smoke-all-tools.sh` (bash, curl, python3) against `http://localhost:8000`. On Windows PowerShell, WSL (or `bash` on `PATH` such as Git Bash) is used. |
 | `--help` / `-h` | `-Help` | Print full help and exit. |
 
 Examples:

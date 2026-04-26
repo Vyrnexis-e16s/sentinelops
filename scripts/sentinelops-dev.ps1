@@ -29,6 +29,8 @@ param(
   [switch] $Stop,
   [switch] $Status,
   [switch] $Logs,
+  [switch] $Migrate,
+  [switch] $Smoke,
   [switch] $All,
   [switch] $Help
 )
@@ -55,6 +57,8 @@ Lifecycle commands:
               are preserved.
   -Status     Show 'docker compose ps' for the project.
   -Logs       Tail the last 200 lines of every service.
+  -Migrate    Run 'alembic upgrade head' in the running backend container.
+  -Smoke      Run scripts/_smoke-all-tools.sh (WSL/bash or Git Bash; API on :8000).
   -Help       Show this message and exit.
 
 Modes (default = setup):
@@ -72,6 +76,8 @@ Examples:
   .\scripts\sentinelops-dev.ps1 -Restart       # bounce the stack and pick up code changes
   .\scripts\sentinelops-dev.ps1 -Stop          # stop everything (data kept)
   .\scripts\sentinelops-dev.ps1 -Status        # see what is running
+  .\scripts\sentinelops-dev.ps1 -Migrate       # alembic upgrade head in backend container
+  .\scripts\sentinelops-dev.ps1 -Smoke         # API smoke (WSL or bash on PATH)
 "@ | Write-Host
   exit 0
 }
@@ -280,8 +286,8 @@ function Wait-BackendHealth {
   Log "Backend /health did not return OK within ~60s (it may still be migrating). Check: docker compose -f infra/docker/docker-compose.yml logs backend" "WARN"
 }
 
-# --- lifecycle: -Stop / -Restart / -Status / -Logs (short-circuit setup) ---
-if ($Stop -or $Restart -or $Status -or $Logs) {
+# --- lifecycle: -Stop / -Restart / -Status / -Logs / -Migrate / -Smoke (short-circuit setup) ---
+if ($Stop -or $Restart -or $Status -or $Logs -or $Migrate -or $Smoke) {
   if (-not (Test-DockerEngine)) {
     Log "Docker is not installed or the engine is not running. Start Docker Desktop, then retry." "ERROR"
     exit 1
@@ -309,6 +315,33 @@ if ($Stop -or $Restart -or $Status -or $Logs) {
   if ($Logs) {
     $null = (Invoke-DockerCompose @("logs", "--tail", "200", "--no-color"))
     exit 0
+  }
+  if ($Migrate) {
+    Log "Running alembic upgrade head in backend container…"
+    $code = (Invoke-DockerCompose @("exec", "-T", "backend", "alembic", "upgrade", "head"))
+    if ($code -ne 0) { Log "alembic failed. Is the stack up? Try: -Restart" "ERROR"; exit 1 }
+    Log "Migrations applied."
+    exit 0
+  }
+  if ($Smoke) {
+    $smSh = Join-Path $ScriptDir "_smoke-all-tools.sh"
+    if (-not (Test-Path -LiteralPath $smSh)) { Log "Missing $smSh" "ERROR"; exit 1 }
+    if (Get-Command wsl -ErrorAction SilentlyContinue) {
+      $u = (wsl wslpath $RepoRoot 2>$null).Trim()
+      if ([string]::IsNullOrEmpty($u)) { Log "wsl wslpath failed. Open WSL once, then retry." "ERROR"; exit 1 }
+      $bashCmd = "set -euo pipefail; cd " + $u.Replace("'", "'\''") + " && bash ./scripts/_smoke-all-tools.sh"
+      wsl -e bash -lc $bashCmd
+      exit $LASTEXITCODE
+    }
+    if (Get-Command bash -ErrorAction SilentlyContinue) {
+      Push-Location $RepoRoot
+      & bash "./scripts/_smoke-all-tools.sh"
+      $c = $LASTEXITCODE
+      Pop-Location
+      exit $c
+    }
+    Log "Install WSL or add Git Bash to PATH to run the smoke script, or run it from Linux/WSL." "ERROR"
+    exit 1
   }
 }
 

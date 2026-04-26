@@ -23,6 +23,8 @@ for arg in "$@"; do
     --restart)     ACTION="restart" ;;
     --status|--ps) ACTION="status" ;;
     --logs)        ACTION="logs" ;;
+    --migrate)     ACTION="migrate" ;;
+    --smoke)       ACTION="smoke" ;;
     --all)         ACTION="run"; FORCE_BUILD=1; RUN_SEED=1 ;;
     *) ;;  # unknown flags are ignored to stay forward-compatible
   esac
@@ -49,6 +51,8 @@ Lifecycle commands:
                are preserved, so data survives.
   --status     Show "docker compose ps" for the project.
   --logs       Tail the last 200 lines of every service.
+  --migrate    Run alembic upgrade head in the running backend container (DB migrations).
+  --smoke      Run scripts/_smoke-all-tools.sh (expects API on localhost:8000, bash + curl + python3).
   --help, -h   Show this message and exit.
 
 Modes (default = setup; MODE env var):
@@ -65,6 +69,8 @@ Examples:
   ./scripts/sentinelops-dev.sh --restart       # bounce the stack and pick up code changes
   ./scripts/sentinelops-dev.sh --stop          # stop everything (data kept)
   ./scripts/sentinelops-dev.sh --status        # see what is running
+  ./scripts/sentinelops-dev.sh --migrate       # apply DB migrations in the backend container
+  ./scripts/sentinelops-dev.sh --smoke         # end-to-end API smoke (bash + stack on :8000)
   MODE=local ./scripts/sentinelops-dev.sh      # venv + node only
 HELP
 }
@@ -211,6 +217,26 @@ if [[ "$ACTION" == "logs" ]]; then
   require_docker || exit 1
   docker_compose logs --tail 200 --no-color
   exit 0
+fi
+
+if [[ "$ACTION" == "migrate" ]]; then
+  require_docker || exit 1
+  log "Running alembic upgrade head in backend container…"
+  if ! docker_compose exec -T backend alembic upgrade head 2>&1 | tee -a "$LOG_FILE"; then
+    logerr "alembic failed. Is the stack up? Try: $0 --restart"
+    exit 1
+  fi
+  log "Migrations applied."
+  exit 0
+fi
+
+if [[ "$ACTION" == "smoke" ]]; then
+  if ! command -v bash >/dev/null 2>&1; then
+    logerr "bash is required to run the smoke script."
+    exit 1
+  fi
+  (cd "$REPO_ROOT" && bash ./scripts/_smoke-all-tools.sh) 2>&1 | tee -a "$LOG_FILE"
+  exit ${PIPESTATUS[0]}
 fi
 
 if [[ "$MODE" == "docker" ]]; then

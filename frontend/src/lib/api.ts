@@ -210,3 +210,50 @@ export type VaptBrief = {
 };
 
 export type LlmSummarizeResult = { summary: string; model: string };
+
+export type MitreFoundationItem = { id: string; name: string; tactic: string };
+export type MitreFoundationOut = { items: MitreFoundationItem[] };
+
+export type VaptTtpMemory = {
+  id: string;
+  technique_id: string;
+  name: string;
+  body: string;
+  narrative: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type VaptGraphEdge = {
+  id: string;
+  from_technique_id: string;
+  to_technique_id: string;
+  relation: string;
+  note: string;
+  created_at: string;
+};
+
+export type VaptCypherExport = { cypher: string; node_count: number; edge_count: number };
+
+export type VaptAnalystFeedback = {
+  id: string;
+  ref_type: "ttp" | "edge" | "brief" | "other";
+  ref_key: string;
+  body: string;
+  created_at: string;
+};
+
+export type VaptOrchestrateResult = { jobs: { id: string; kind: string; status: string }[]; target_id: string };
+
+const RECON_KINDS = [
+  "subdomain",
+  "port",
+  "cve",
+  "webfuzz",
+  "dns",
+  "httprobe",
+  "http_headers",
+  "tls_cert"
+] as const;
+
+export { RECON_KINDS };

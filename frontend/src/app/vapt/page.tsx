@@ -2,18 +2,34 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { Brain, Loader2, Network, Plus, Save, Sparkles, Trash2 } from "lucide-react";
+import {
+  Brain,
+  ClipboardCopy,
+  Loader2,
+  Network,
+  Plus,
+  Save,
+  Sparkles,
+  Trash2
+} from "lucide-react";
 import SectionHeader from "@/components/shared/SectionHeader";
 import {
+  RECON_KINDS,
   api,
   type ApiError,
   type Alert,
   type Inference,
   type LlmSummarizeResult,
+  type MitreFoundationOut,
   type Paginated,
   type ReconFinding,
+  type VaptAnalystFeedback,
   type VaptBrief,
-  type VaptSurface
+  type VaptCypherExport,
+  type VaptGraphEdge,
+  type VaptOrchestrateResult,
+  type VaptSurface,
+  type VaptTtpMemory
 } from "@/lib/api";
 import { runDeferred } from "@/lib/schedule-deferred";
 
@@ -26,18 +42,51 @@ export default function VaptPage() {
   const [briefs, setBriefs] = useState<VaptBrief[]>([]);
   const [saving, setSaving] = useState(false);
   const [title, setTitle] = useState("Executive summary");
+  const [injectMitre, setInjectMitre] = useState(false);
+  const [mitre, setMitre] = useState<MitreFoundationOut | null>(null);
+  const [ttpRows, setTtpRows] = useState<VaptTtpMemory[]>([]);
+  const [ttpTid, setTtpTid] = useState("T1190");
+  const [ttpName, setTtpName] = useState("");
+  const [ttpBody, setTtpBody] = useState("");
+  const [ttpBusy, setTtpBusy] = useState(false);
+  const [edges, setEdges] = useState<VaptGraphEdge[]>([]);
+  const [eFrom, setEFrom] = useState("T1190");
+  const [eTo, setETo] = useState("T1003");
+  const [eRel, setERel] = useState("leads_to");
+  const [eNote, setENote] = useState("");
+  const [eBusy, setEBusy] = useState(false);
+  const [cypher, setCypher] = useState<VaptCypherExport | null>(null);
+  const [orchTarget, setOrchTarget] = useState("example.com");
+  const [orchKinds, setOrchKinds] = useState<Set<string>>(
+    () => new Set(["subdomain", "dns", "httprobe"])
+  );
+  const [orchBusy, setOrchBusy] = useState(false);
+  const [orchOut, setOrchOut] = useState<VaptOrchestrateResult | null>(null);
+  const [feedback, setFeedback] = useState<VaptAnalystFeedback[]>([]);
+  const [fbBody, setFbBody] = useState("");
+  const [fbType, setFbType] = useState<"ttp" | "edge" | "brief" | "other">("other");
+  const [fbKey, setFbKey] = useState("");
+  const [fbBusy, setFbBusy] = useState(false);
   const [busy, setBusy] = useState({ load: true, gen: false, del: null as string | null });
 
   const load = useCallback(async () => {
     setErr(null);
     setBusy((b) => ({ ...b, load: true }));
     try {
-      const [s, b] = await Promise.all([
+      const [s, b, ttp, ge, fb, m] = await Promise.all([
         api.get<VaptSurface>("/api/v1/vapt/surface"),
-        api.get<Paginated<VaptBrief>>("/api/v1/vapt/briefs?size=30")
+        api.get<Paginated<VaptBrief>>("/api/v1/vapt/briefs?size=30"),
+        api.get<Paginated<VaptTtpMemory>>("/api/v1/vapt/ttp?size=50"),
+        api.get<Paginated<VaptGraphEdge>>("/api/v1/vapt/graph/edges?size=100"),
+        api.get<Paginated<VaptAnalystFeedback>>("/api/v1/vapt/feedback?size=30"),
+        api.get<MitreFoundationOut>("/api/v1/vapt/mitre/foundation")
       ]);
       setSurface(s);
       setBriefs(b.items);
+      setTtpRows(ttp.items);
+      setEdges(ge.items);
+      setFeedback(fb.items);
+      setMitre(m);
     } catch (e) {
       const a = e as ApiError;
       if (a.status === 401) {
@@ -104,7 +153,8 @@ export default function VaptPage() {
     setBusy((b) => ({ ...b, gen: true }));
     try {
       const r = await api.post<LlmSummarizeResult>("/api/v1/vapt/llm/summarize", {
-        context: ctx
+        context: ctx,
+        inject_mitre_context: injectMitre
       });
       setOut(r.summary);
       setLlmModel(r.model);
@@ -151,6 +201,140 @@ export default function VaptPage() {
     }
   };
 
+  const saveTtp = async () => {
+    if (!ttpTid.trim()) return;
+    setTtpBusy(true);
+    setErr(null);
+    try {
+      const row = await api.put<VaptTtpMemory>("/api/v1/vapt/ttp", {
+        technique_id: ttpTid.trim(),
+        name: ttpName,
+        body: ttpBody,
+        narrative: {}
+      });
+      setTtpRows((prev) => {
+        const rest = prev.filter((x) => x.technique_id !== row.technique_id);
+        return [row, ...rest];
+      });
+    } catch (e) {
+      const a = e as ApiError;
+      setErr(a.detail || "TTP save failed — run DB migrations if the table is missing.");
+    } finally {
+      setTtpBusy(false);
+    }
+  };
+
+  const delTtp = async (id: string) => {
+    setErr(null);
+    try {
+      await api.del(`/api/v1/vapt/ttp/${id}`);
+      setTtpRows((prev) => prev.filter((x) => x.id !== id));
+    } catch (e) {
+      const a = e as ApiError;
+      setErr(a.detail || "Delete TTP failed.");
+    }
+  };
+
+  const addEdge = async () => {
+    setEBusy(true);
+    setErr(null);
+    try {
+      const row = await api.post<VaptGraphEdge>("/api/v1/vapt/graph/edges", {
+        from_technique_id: eFrom.trim(),
+        to_technique_id: eTo.trim(),
+        relation: eRel,
+        note: eNote
+      });
+      setEdges((prev) => [row, ...prev]);
+    } catch (e) {
+      const a = e as ApiError;
+      setErr(a.detail || "Add edge failed.");
+    } finally {
+      setEBusy(false);
+    }
+  };
+
+  const delEdge = async (id: string) => {
+    setErr(null);
+    try {
+      await api.del(`/api/v1/vapt/graph/edges/${id}`);
+      setEdges((prev) => prev.filter((x) => x.id !== id));
+    } catch (e) {
+      const a = e as ApiError;
+      setErr(a.detail || "Delete edge failed.");
+    }
+  };
+
+  const loadCypher = async () => {
+    setErr(null);
+    try {
+      const c = await api.get<VaptCypherExport>("/api/v1/vapt/graph/cypher");
+      setCypher(c);
+    } catch (e) {
+      const a = e as ApiError;
+      setErr(a.detail || "Cypher export failed.");
+    }
+  };
+
+  const copyCypher = async () => {
+    if (!cypher?.cypher) return;
+    await navigator.clipboard.writeText(cypher.cypher);
+  };
+
+  const runOrchestrate = async () => {
+    if (!orchTarget.trim() || orchKinds.size === 0) {
+      setErr("Set an allowlisted target and at least one recon kind.");
+      return;
+    }
+    setOrchBusy(true);
+    setOrchOut(null);
+    setErr(null);
+    try {
+      const r = await api.post<VaptOrchestrateResult>("/api/v1/vapt/recon/orchestrate", {
+        target: orchTarget.trim(),
+        kinds: Array.from(orchKinds),
+        default_params: {}
+      });
+      setOrchOut(r);
+    } catch (e) {
+      const a = e as ApiError;
+      setErr(a.detail || "Orchestrate failed (allowlist / worker / queue).");
+    } finally {
+      setOrchBusy(false);
+    }
+  };
+
+  const saveFeedback = async () => {
+    if (!fbBody.trim()) return;
+    setFbBusy(true);
+    setErr(null);
+    try {
+      const row = await api.post<VaptAnalystFeedback>("/api/v1/vapt/feedback", {
+        ref_type: fbType,
+        ref_key: fbKey,
+        body: fbBody
+      });
+      setFeedback((prev) => [row, ...prev]);
+      setFbBody("");
+    } catch (e) {
+      const a = e as ApiError;
+      setErr(a.detail || "Feedback save failed.");
+    } finally {
+      setFbBusy(false);
+    }
+  };
+
+  const delFeedback = async (id: string) => {
+    setErr(null);
+    try {
+      await api.del(`/api/v1/vapt/feedback/${id}`);
+      setFeedback((prev) => prev.filter((x) => x.id !== id));
+    } catch (e) {
+      const a = e as ApiError;
+      setErr(a.detail || "Delete feedback failed.");
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="rounded-2xl border border-amber-500/25 bg-gradient-to-br from-amber-950/25 via-bg to-violet-950/20 p-[1px] shadow-[0_0_40px_-12px_rgba(245,158,11,0.35)]">
@@ -167,10 +351,11 @@ export default function VaptPage() {
                 Unified surface &amp; triage
               </h1>
               <p className="text-sm text-muted mt-1 max-w-3xl">
-                Metrics and assembled context are read from your running SentinelOps services (Postgres
-                + workers). The optional triage call uses your configured OpenAI-compatible endpoint —
-                it never returns canned copy when the key is missing (you get a 503 with setup text).
-                Saved briefs are stored in <span className="font-mono">vapt_briefs</span> per user.
+                Metrics and assembled context are read from your running stack (Postgres + workers). TTP
+                memory and graph edges are analyst-curated (not self-training). Cypher is an optional export;
+                batch recon enqueues the same job types as <span className="font-mono">/recon/jobs</span>.
+                The LLM path uses your OpenAI-compatible endpoint; without a key you get 503, not fake text.
+                Run <span className="font-mono">alembic upgrade head</span> for new VAPT tables after pull.
               </p>
             </div>
           </div>
@@ -253,7 +438,16 @@ export default function VaptPage() {
             className="w-full text-xs font-mono bg-bg/50 border border-border/60 rounded-md p-2 outline-none focus:border-violet-500/50"
             spellCheck={false}
           />
-          <div className="mt-3 flex flex-wrap items-center gap-2">
+          <div className="mt-3 flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2">
+            <label className="inline-flex items-center gap-2 text-[11px] text-muted">
+              <input
+                type="checkbox"
+                checked={injectMitre}
+                onChange={(e) => setInjectMitre(e.target.checked)}
+                className="rounded border-border"
+              />
+              Append curated MITRE reference to the system prompt (no live ATT&amp;CK API).
+            </label>
             <button
               type="button"
               onClick={() => void generate()}
@@ -295,6 +489,272 @@ export default function VaptPage() {
             </button>
           </div>
         </div>
+      </div>
+
+      <SectionHeader
+        eyebrow="TTP & graph"
+        title="Analyst memory &amp; export"
+        description="Notes keyed by MITRE technique id, optional edges, and a paste-ready Cypher script. This is not autonomous red-teaming — it is structured note-taking in Postgres."
+      />
+
+      {mitre && (
+        <div className="text-[11px] text-muted font-mono max-w-4xl">
+          MITRE foundation bundle loaded: {mitre.items.length} entries (read-only, bundled JSON).
+        </div>
+      )}
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div className="glass rounded-xl p-4 border border-amber-500/15">
+          <h3 className="text-sm font-medium text-amber-200/90 mb-2">TTP memory (upsert by technique id)</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
+            <div>
+              <label className="text-[10px] text-muted">Technique id</label>
+              <input
+                value={ttpTid}
+                onChange={(e) => setTtpTid(e.target.value)}
+                className="mt-0.5 w-full text-sm font-mono bg-panel/50 border border-border/60 rounded px-2 py-1"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-muted">Display name (optional)</label>
+              <input
+                value={ttpName}
+                onChange={(e) => setTtpName(e.target.value)}
+                className="mt-0.5 w-full text-sm bg-panel/50 border border-border/60 rounded px-2 py-1"
+              />
+            </div>
+          </div>
+          <label className="text-[10px] text-muted">Notes / narrative</label>
+          <textarea
+            value={ttpBody}
+            onChange={(e) => setTtpBody(e.target.value)}
+            rows={4}
+            className="mt-0.5 w-full text-xs font-mono bg-bg/50 border border-border/60 rounded-md p-2"
+          />
+          <button
+            type="button"
+            onClick={() => void saveTtp()}
+            disabled={ttpBusy}
+            className="mt-2 text-xs px-3 py-1.5 rounded-md border border-amber-500/40 text-amber-100 hover:bg-amber-500/10"
+          >
+            {ttpBusy ? <Loader2 className="h-3 w-3 inline animate-spin" /> : null} Save TTP memory
+          </button>
+          <ul className="mt-3 space-y-2 max-h-48 overflow-auto">
+            {ttpRows.map((r) => (
+              <li key={r.id} className="text-xs border border-border/40 rounded p-2 bg-panel/30">
+                <div className="flex justify-between gap-2">
+                  <span className="font-mono text-amber-200/80">{r.technique_id}</span>
+                  <button
+                    type="button"
+                    onClick={() => void delTtp(r.id)}
+                    className="text-[10px] text-muted hover:text-danger"
+                  >
+                    Delete
+                  </button>
+                </div>
+                {r.name ? <div className="text-muted text-[10px]">{r.name}</div> : null}
+                <p className="text-[11px] text-text/80 mt-1 line-clamp-3 whitespace-pre-wrap">{r.body}</p>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="glass rounded-xl p-4 border border-sky-500/15">
+          <h3 className="text-sm font-medium text-sky-200/90 mb-2">Graph edge (TTP → TTP)</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div>
+              <label className="text-[10px] text-muted">From</label>
+              <input
+                value={eFrom}
+                onChange={(e) => setEFrom(e.target.value)}
+                className="mt-0.5 w-full text-sm font-mono bg-panel/50 border border-border/60 rounded px-2 py-1"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-muted">To</label>
+              <input
+                value={eTo}
+                onChange={(e) => setETo(e.target.value)}
+                className="mt-0.5 w-full text-sm font-mono bg-panel/50 border border-border/60 rounded px-2 py-1"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-muted">Relation</label>
+              <input
+                value={eRel}
+                onChange={(e) => setERel(e.target.value)}
+                className="mt-0.5 w-full text-sm bg-panel/50 border border-border/60 rounded px-2 py-1"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-muted">Note</label>
+              <input
+                value={eNote}
+                onChange={(e) => setENote(e.target.value)}
+                className="mt-0.5 w-full text-sm bg-panel/50 border border-border/60 rounded px-2 py-1"
+              />
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => void addEdge()}
+            disabled={eBusy}
+            className="mt-2 text-xs px-3 py-1.5 rounded-md border border-sky-500/40 text-sky-100 hover:bg-sky-500/10"
+          >
+            {eBusy ? <Loader2 className="h-3 w-3 inline animate-spin" /> : null} Add edge
+          </button>
+          <ul className="mt-2 space-y-1 max-h-40 overflow-auto text-[11px] font-mono">
+            {edges.map((e) => (
+              <li key={e.id} className="flex justify-between gap-2 border border-border/30 rounded px-2 py-1">
+                <span>
+                  {e.from_technique_id} → {e.to_technique_id} ({e.relation})
+                </span>
+                <button type="button" onClick={() => void delEdge(e.id)} className="text-muted hover:text-danger">
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div className="glass rounded-xl p-4 border border-rose-500/15">
+          <h3 className="text-sm font-medium text-rose-200/90 mb-2">Cypher export (Neo4j — optional)</h3>
+          <p className="text-xs text-muted mb-2">
+            Builds MERGE statements from your TTP rows and edges. Nothing runs against Neo4j from the API.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void loadCypher()}
+              className="text-xs px-3 py-1.5 rounded-md border border-rose-500/40 text-rose-100 hover:bg-rose-500/10"
+            >
+              Build Cypher
+            </button>
+            {cypher ? (
+              <button
+                type="button"
+                onClick={() => void copyCypher()}
+                className="text-xs inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-border/50"
+              >
+                <ClipboardCopy className="h-3 w-3" /> Copy
+              </button>
+            ) : null}
+            {cypher ? (
+              <span className="text-[11px] text-muted self-center">
+                nodes {cypher.node_count} · edges {cypher.edge_count}
+              </span>
+            ) : null}
+          </div>
+          {cypher ? (
+            <pre className="mt-2 text-[10px] font-mono whitespace-pre-wrap max-h-40 overflow-auto bg-bg/40 p-2 rounded border border-border/40">
+              {cypher.cypher}
+            </pre>
+          ) : null}
+        </div>
+
+        <div className="glass rounded-xl p-4 border border-cyan-500/15">
+          <h3 className="text-sm font-medium text-cyan-200/90 mb-2">Recon batch (allowlisted target)</h3>
+          <p className="text-xs text-muted mb-2">
+            Enqueues the selected kinds — same Celery workers as the Recon page. Use a value allowed by
+            RECON_TARGET_ALLOWLIST.
+          </p>
+          <input
+            value={orchTarget}
+            onChange={(e) => setOrchTarget(e.target.value)}
+            className="w-full text-sm font-mono bg-panel/50 border border-border/60 rounded px-2 py-1 mb-2"
+            placeholder="e.g. example.com"
+          />
+          <div className="flex flex-wrap gap-2 mb-2">
+            {RECON_KINDS.map((k) => (
+              <label key={k} className="text-[10px] font-mono flex items-center gap-1.5 text-muted">
+                <input
+                  type="checkbox"
+                  checked={orchKinds.has(k)}
+                  onChange={() => {
+                    setOrchKinds((prev) => {
+                      const n = new Set(prev);
+                      if (n.has(k)) n.delete(k);
+                      else n.add(k);
+                      return n;
+                    });
+                  }}
+                />
+                {k}
+              </label>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => void runOrchestrate()}
+            disabled={orchBusy}
+            className="text-xs px-3 py-1.5 rounded-md border border-cyan-500/40 text-cyan-100 hover:bg-cyan-500/10"
+          >
+            {orchBusy ? <Loader2 className="h-3 w-3 inline animate-spin" /> : null} Enqueue jobs
+          </button>
+          {orchOut ? (
+            <pre className="mt-2 text-[10px] font-mono bg-bg/40 p-2 rounded border border-border/40 max-h-32 overflow-auto">
+              {JSON.stringify(orchOut, null, 2)}
+            </pre>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="glass rounded-xl p-4 border border-border/50">
+        <h3 className="text-sm font-medium mb-2">Analyst feedback (internal notes)</h3>
+        <div className="flex flex-wrap gap-2 mb-2">
+          <select
+            value={fbType}
+            onChange={(e) => setFbType(e.target.value as typeof fbType)}
+            className="text-xs bg-panel/50 border border-border/60 rounded px-2 py-1"
+          >
+            <option value="ttp">ttp</option>
+            <option value="edge">edge</option>
+            <option value="brief">brief</option>
+            <option value="other">other</option>
+          </select>
+          <input
+            value={fbKey}
+            onChange={(e) => setFbKey(e.target.value)}
+            placeholder="ref id (optional)"
+            className="text-xs font-mono flex-1 min-w-[8rem] bg-panel/50 border border-border/60 rounded px-2 py-1"
+          />
+        </div>
+        <textarea
+          value={fbBody}
+          onChange={(e) => setFbBody(e.target.value)}
+          rows={2}
+          className="w-full text-xs bg-bg/50 border border-border/60 rounded-md p-2"
+          placeholder="Short comment…"
+        />
+        <button
+          type="button"
+          onClick={() => void saveFeedback()}
+          disabled={fbBusy}
+          className="mt-2 text-xs px-3 py-1.5 rounded-md border border-border/50"
+        >
+          {fbBusy ? <Loader2 className="h-3 w-3 inline animate-spin" /> : null} Save feedback
+        </button>
+        <ul className="mt-2 space-y-1 text-xs">
+          {feedback.map((f) => (
+            <li key={f.id} className="flex justify-between gap-2 border border-border/30 rounded px-2 py-1">
+              <span className="min-w-0">
+                <span className="font-mono text-[10px] text-muted">
+                  {f.ref_type} {f.ref_key}
+                </span>{" "}
+                {f.body}
+              </span>
+              <button
+                type="button"
+                onClick={() => void delFeedback(f.id)}
+                className="text-muted hover:text-danger shrink-0"
+              >
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
       </div>
 
       <div className="glass rounded-xl p-4 border border-border/50">
