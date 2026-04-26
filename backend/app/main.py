@@ -25,6 +25,7 @@ from app.modules.recon.router import router as recon_router
 from app.modules.siem.router import router as siem_router
 from app.modules.siem import intel_routes, ws_routes
 from app.modules.vault.router import router as vault_router
+from app.modules.vapt.router import router as vapt_router
 
 log = structlog.get_logger(__name__)
 
@@ -80,6 +81,7 @@ def create_app() -> FastAPI:
     app.include_router(recon_router, prefix="/api/v1")
     app.include_router(ids_router, prefix="/api/v1")
     app.include_router(vault_router, prefix="/api/v1")
+    app.include_router(vapt_router, prefix="/api/v1")
     app.include_router(ws_routes.router, prefix="/ws")
 
     # ------- ops endpoints --------

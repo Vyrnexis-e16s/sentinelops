@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     hsm_pkcs11_lib: str = Field("", alias="HSM_PKCS11_LIB")
     neograph_uri: str = Field("", alias="NEO4J_URI")
 
+    # --- Optional LLM (VAPT triage / OpenAI-compatible) ---
+    openai_api_key: str = Field("", alias="OPENAI_API_KEY")
+    sentinelops_llm_model: str = Field("gpt-4o-mini", alias="SENTINELOPS_LLM_MODEL")
+    sentinelops_llm_base_url: str = Field("https://api.openai.com/v1", alias="SENTINELOPS_LLM_BASE_URL")
+
     # --- CORS ---
     cors_origins: list[str] = Field(
         default_factory=lambda: ["http://localhost:3000", "http://127.0.0.1:3000"]

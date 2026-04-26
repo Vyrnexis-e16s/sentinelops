@@ -7,6 +7,7 @@ import {
   Crosshair,
   LayoutDashboard,
   Lock,
+  Network,
   Radar,
   Search,
   Shield
@@ -18,7 +19,8 @@ const routes = [
   { href: "/siem", label: "SIEM", icon: Shield, kw: "alerts rules blue" },
   { href: "/recon", label: "Recon", icon: Crosshair, kw: "scan ports" },
   { href: "/ids", label: "IDS", icon: Radar, kw: "ml network" },
-  { href: "/vault", label: "Vault", icon: Lock, kw: "files encryption" }
+  { href: "/vault", label: "Vault", icon: Lock, kw: "files encryption" },
+  { href: "/vapt", label: "VAPT", icon: Network, kw: "surface triage assess" }
 ];
 
 export const PALETTE_OPEN_EVENT = "sentinelops:palette-open";

@@ -6,7 +6,9 @@ import { useEffect, useRef } from "react";
  */
 export function useInterval(fn: () => void, ms: number): void {
   const ref = useRef(fn);
-  ref.current = fn;
+  useEffect(() => {
+    ref.current = fn;
+  }, [fn]);
 
   useEffect(() => {
     if (ms <= 0) return;

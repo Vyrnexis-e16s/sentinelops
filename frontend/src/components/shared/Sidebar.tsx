@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Activity, Crosshair, Lock, Radar, Shield } from "lucide-react";
+import { Activity, Crosshair, Lock, Network, Radar, Shield } from "lucide-react";
 import { cn } from "@/lib/cn";
 
 const NAV = [
@@ -10,7 +10,8 @@ const NAV = [
   { href: "/siem", label: "SIEM", icon: Shield },
   { href: "/recon", label: "Recon", icon: Crosshair },
   { href: "/ids", label: "IDS", icon: Radar },
-  { href: "/vault", label: "Vault", icon: Lock }
+  { href: "/vault", label: "Vault", icon: Lock },
+  { href: "/vapt", label: "VAPT", icon: Network }
 ];
 
 export default function Sidebar() {

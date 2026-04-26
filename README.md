@@ -18,15 +18,14 @@ It is not a replacement for Splunk, Nessus, Suricata, or a managed KMS. It is a 
 
 ```
 ┌─────────────────────────── Next.js 16 (App Router) ───────────────────────────┐
-│  Dashboard  │    SIEM    │   Recon   │    IDS    │   Vault   │  Theme Toggle │
-│             │            │           │           │           │ Tactical │ Aurora │
-└────────┬──────────────┬──────────────┬──────────────┬──────────────┬─────────┘
-         │              │              │              │              │
-         │              │              │              │              │ REST + WS
-         ▼              ▼              ▼              ▼              ▼
+│  Dashboard  │  SIEM  │  Recon  │  IDS  │  Vault  │  VAPT  │  Theme  │
+│             │        │         │       │         │        │  Tactical / Aurora
+└──────┬──────┴───┬────┴────┬────┴───┬───┴────┬────┴───┬────┴────┬───┘
+       │          │         │         │         │         │  REST + WS
+       ▼          ▼         ▼         ▼         ▼         ▼
 ┌───────────────────────── FastAPI (Python 3.11) ─────────────────────────────┐
-│  /api/v1/siem  │  /api/v1/recon  │  /api/v1/ids  │  /api/v1/vault  │  auth │
-└────────┬──────────────┬──────────────┬──────────────┬──────────────┬────────┘
+│  /api/v1/siem │ /api/v1/recon │ /api/v1/ids │ /api/v1/vault │ /api/v1/vapt │ auth │
+└──────┬──────────────┬──────────────┬──────────────┬──────────────┬──────┘
          │              │              │              │              │
          ▼              ▼              ▼              ▼              ▼
    Postgres        Celery workers     scikit-learn   AES-GCM +     JWT +
@@ -39,7 +38,7 @@ It is not a replacement for Splunk, Nessus, Suricata, or a managed KMS. It is a 
               (broker + cache + pub/sub)
 ```
 
-The four modules share auth, the event bus, the audit log, and the UI shell. Everything else is isolated — you can delete a module directory and the rest keeps running.
+The modules share auth, the event bus, the audit log, and the UI shell. Feature areas are isolated — you can delete a module package and the rest keeps running, within dependency limits.
 
 ## Running it
 
@@ -127,9 +126,9 @@ CI runs the same commands on every push and on pull requests into `main`.
 
 This repo is a **production-oriented security platform reference**: real module APIs are implemented, while commercial-scale gaps and future integrations are tracked openly. Production hardening guidance is in [`docs/PRODUCTION.md`](docs/PRODUCTION.md), and the detailed backlog is in [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
-**Shipped in-tree (v1+ extensions)** include: a **limited Sigma → rule DSL** compiler (`POST /api/v1/siem/sigma/compile`), **STIX indicator ingest** and **IOC enrichment** on event ingest, a **WebSocket** alert stream at `/ws/alerts?token=`, a **per-source UEBA-style** volume summary, **case investigations** CRUD, **Prometheus** metrics at `/metrics` when enabled, an IDS **drift** summary and **explanation proxy** (tree feature importance) on inference, and a **command palette (⌘K)** on the UI.
+**Shipped in-tree (v1+ extensions)** include: a **limited Sigma → rule DSL** compiler (`POST /api/v1/siem/sigma/compile`), **STIX indicator ingest** and **IOC enrichment** on event ingest, a **WebSocket** alert stream at `/ws/alerts?token=`, a **per-source UEBA-style** volume summary, **case investigations** CRUD, **Prometheus** metrics at `/metrics` when enabled, an IDS **drift** summary and **explanation proxy** (tree feature importance) on inference, a **command palette (⌘K)** on the UI, a **VAPT command** view at `/vapt` with **live** roll-up from Postgres (`GET /api/v1/vapt/surface`), **optional** OpenAI-compatible **LLM triage** (`POST /api/v1/vapt/llm/summarize` when `OPENAI_API_KEY` is set — otherwise HTTP 503 with setup text, no fake summaries), and **saved briefs** in `vapt_briefs` per user.
 
-Remaining themes: full Sigma parity, a real TAXII **client** with scheduling, distributed recon workers, OIDC, multi-tenant RLS, HSM, PQC, LLM triage, Neo4j, eBPF, Helm/Terraform, and more — all expanded in the roadmap.
+Remaining themes: full Sigma parity, a real TAXII **client** with scheduling, distributed recon workers, OIDC, multi-tenant RLS, HSM, PQC, on-prem LLM (vLLM) automation beyond single-shot triage, Neo4j, eBPF, Helm/Terraform, and more — all expanded in the roadmap.
 
 ## Legal and ethical use
 

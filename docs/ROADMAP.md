@@ -66,9 +66,15 @@ What's here now, what landed recently, and what a **production** build would sti
 - **Command palette** — search alerts by ID, paste Sigma, jump to investigation (extends current module-only palette).
 - **i18n** — `next-intl` (or similar) with English as the seed locale.
 
+## Shipped: VAPT command + optional LLM
+
+- **UI** — `/vapt`: live `GET /api/v1/vapt/surface` (SIEM / recon / IDS / vault / investigations counts from Postgres).
+- **LLM** — `POST /api/v1/vapt/llm/summarize` calls `OPENAI_API_KEY` + `SENTINELOPS_LLM_BASE_URL` (OpenAI or compatible, e.g. vLLM). Returns **503** if unconfigured; **no** canned “demo” text.
+- **Memory** — `vapt_briefs` table: user-saved executive summaries (not ML weights).
+
 ## Research / experimental (next)
 
-- **LLM triage** — local open model (vLLM / llama.cpp), optional offline-only; no paid API as default; prompt templates per MITRE technique.
+- **LLM triage (extended)** — local open model (vLLM / llama.cpp) as first-class; prompt templates per MITRE technique; multi-step agent beyond single completion.
 - **Neo4j** — `NEO4J_URI` reserved; BFS/shortest path on alert/entity graph for kill chain narrative.
 - **eBPF** — small Go agent streaming syscalls + socket events into SIEM normalisation.
 - **Deception / honey-tokens** — planted canary credentials in Vault that fire a high-severity alert when accessed.

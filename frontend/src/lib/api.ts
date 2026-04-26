@@ -188,3 +188,25 @@ export type PlatformStatus = {
   ids_model: string;
   modules: string[];
 };
+
+export type VaptSurface = {
+  siem_alerts_new: number;
+  siem_alerts_ack: number;
+  siem_events_24h: number;
+  recon_jobs_queued: number;
+  recon_jobs_running: number;
+  recon_findings_total: number;
+  ids_inferences_24h: number;
+  ids_attacks_24h: number;
+  vault_files: number;
+  investigations_open: number;
+};
+
+export type VaptBrief = {
+  id: string;
+  title: string;
+  body: string;
+  created_at: string;
+};
+
+export type LlmSummarizeResult = { summary: string; model: string };

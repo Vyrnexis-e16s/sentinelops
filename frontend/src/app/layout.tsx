@@ -9,7 +9,7 @@ import { CommandPalette } from "@/components/shared/CommandPalette";
 
 export const metadata: Metadata = {
   title: "SentinelOps — Unified Security Operations",
-  description: "Single-pane SOC: SIEM · Recon · IDS · Vault.",
+  description: "Single-pane SOC: SIEM · Recon · IDS · Vault · VAPT command.",
   icons: { icon: "/favicon.svg" }
 };
 

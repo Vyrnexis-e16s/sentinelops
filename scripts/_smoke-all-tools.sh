@@ -116,6 +116,10 @@ if [[ -z "$TOKEN" ]]; then
 fi
 ok "login OK, JWT acquired (${#TOKEN} bytes)"
 
+section "0b. VAPT — authenticated surface (Postgres roll-up)"
+VAPT_S="$(req GET /vapt/surface)"
+check2xx "GET /vapt/surface" "$VAPT_S"
+
 section "1. Recon — list targets, jobs, findings"
 TARGETS="$(req GET /recon/targets)"
 check2xx "GET /recon/targets" "$TARGETS"
