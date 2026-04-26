@@ -43,6 +43,7 @@ export default function VaptPage() {
   const [saving, setSaving] = useState(false);
   const [title, setTitle] = useState("Executive summary");
   const [injectMitre, setInjectMitre] = useState(false);
+  const [useLlmCascade, setUseLlmCascade] = useState(true);
   const [mitre, setMitre] = useState<MitreFoundationOut | null>(null);
   const [ttpRows, setTtpRows] = useState<VaptTtpMemory[]>([]);
   const [ttpTid, setTtpTid] = useState("T1190");
@@ -154,7 +155,8 @@ export default function VaptPage() {
     try {
       const r = await api.post<LlmSummarizeResult>("/api/v1/vapt/llm/summarize", {
         context: ctx,
-        inject_mitre_context: injectMitre
+        inject_mitre_context: injectMitre,
+        use_cascade: useLlmCascade
       });
       setOut(r.summary);
       setLlmModel(r.model);
@@ -162,7 +164,7 @@ export default function VaptPage() {
       const a = e as ApiError;
       if (a.status === 503) {
         setErr(
-          `${a.detail} Configure OPENAI_API_KEY and optionally SENTINELOPS_LLM_BASE_URL (for Ollama/vLLM) on the API.`
+          `${a.detail} For cloud: OPENAI_API_KEY. For Ollama: run ./scripts/sentinelops-dev.sh --setup-llm (or scripts/setup-local-llm.ps1), merge .env.llm.local.generated, set SENTINELOPS_LLM_OLLAMA=1, restart the API.`
         );
       } else {
         setErr(a.detail || "LLM call failed.");
@@ -448,6 +450,15 @@ export default function VaptPage() {
               />
               Append curated MITRE reference to the system prompt (no live ATT&amp;CK API).
             </label>
+            <label className="inline-flex items-center gap-2 text-[11px] text-muted">
+              <input
+                type="checkbox"
+                checked={useLlmCascade}
+                onChange={(e) => setUseLlmCascade(e.target.checked)}
+                className="rounded border-border"
+              />
+              Two-step (draft+refine) when the API has SENTINELOPS_LLM_DRAFT_MODEL set.
+            </label>
             <button
               type="button"
               onClick={() => void generate()}
@@ -467,7 +478,8 @@ export default function VaptPage() {
             <span className="text-sm font-medium">Output &amp; memory</span>
           </div>
           <pre className="whitespace-pre-wrap text-xs text-text/90 font-mono min-h-[12rem] max-h-[20rem] overflow-auto bg-bg/40 rounded-md p-3 border border-border/40">
-            {out || "Generated summary appears here. Requires OPENAI_API_KEY on the API."}
+            {out ||
+              "Generated summary appears here. Configure cloud API key, or Ollama + .env (see scripts/sentinelops-dev --setup-llm)."}
           </pre>
           <div className="mt-3 flex flex-wrap items-end gap-2">
             <div className="flex-1 min-w-[120px]">

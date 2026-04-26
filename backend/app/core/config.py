@@ -81,6 +81,11 @@ class Settings(BaseSettings):
     openai_api_key: str = Field("", alias="OPENAI_API_KEY")
     sentinelops_llm_model: str = Field("gpt-4o-mini", alias="SENTINELOPS_LLM_MODEL")
     sentinelops_llm_base_url: str = Field("https://api.openai.com/v1", alias="SENTINELOPS_LLM_BASE_URL")
+    # Ollama / local: set SENTINELOPS_LLM_OLLAMA=1 to allow an empty key (Bearer ollama is used).
+    sentinelops_llm_ollama: bool = Field(False, alias="SENTINELOPS_LLM_OLLAMA")
+    # Two-step triage: fast draft model, then SENTINELOPS_LLM_MODEL for the final brief (efficiency).
+    sentinelops_llm_draft_model: str = Field("", alias="SENTINELOPS_LLM_DRAFT_MODEL")
+    sentinelops_llm_cascade: bool = Field(True, alias="SENTINELOPS_LLM_CASCADE")
 
     # --- CORS ---
     cors_origins: list[str] = Field(

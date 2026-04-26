@@ -31,6 +31,9 @@ The scripts expose lifecycle commands. `--all` and `--restart` go through the **
 | `--logs` | `-Logs` | Tails the last 200 lines of every service (`docker compose logs --tail 200`). |
 | `--migrate` | `-Migrate` | `docker compose exec backend alembic upgrade head` (apply DB migrations; requires running stack). |
 | `--smoke` | `-Smoke` | Runs `scripts/_smoke-all-tools.sh` (bash, curl, python3) against `http://localhost:8000`. On Windows PowerShell, WSL (or `bash` on `PATH` such as Git Bash) is used. |
+| `--setup-llm` | `-SetupLlm` | **Local Ollama (optional):** finds `ollama` on the machine, pulls `qwen2.5:7b` (draft) and `llama3.1:8b` (refine), and writes `/.env.llm.local.generated` with `SENTINELOPS_LLM_BASE_URL` for `127.0.0.1:11434`. Merge those lines into `.env`. Override model tags with env `SENTINELOPS_LLM_DRAFT_MODEL` / `SENTINELOPS_LLM_MODEL` when invoking the script. If the API runs in Docker, point the base URL at the host: `http://host.docker.internal:11434/v1` (and add `extra_hosts` for Linux). |
+| `--bootstrap` | `-Bootstrap` | **Prerequisites:** `bootstrap-prereqs.sh --check` (no sudo) reports Python / Node / Docker. With **`--auto`** (or env `SENTINELOPS_AUTO_INSTALL=1`), on **apt** Linux: `sudo apt` installs `docker.io`, Node 20 (NodeSource), Python venv. **Not** a full OS installer: Fedora/Arch, air‑gapped, or non‑`winget` Windows still need manual steps. On Windows, `-Auto` can `winget` Node (and the rest of the script already can `winget` Python). |
+| `--auto` | `-Auto` | Sets `SENTINELOPS_AUTO_INSTALL=1` for that run. Combine with `--all` for “full stack + best‑effort dep install” on supported platforms (see above). |
 | `--help` / `-h` | `-Help` | Print full help and exit. |
 
 Examples:
@@ -42,6 +45,10 @@ Examples:
 ./scripts/sentinelops-dev.sh --restart      # apply code/config changes
 ./scripts/sentinelops-dev.sh --stop
 ./scripts/sentinelops-dev.sh --status
+# Optional: Ollama + two local models for VAPT LLM (draft → refine)
+./scripts/sentinelops-dev.sh --setup-llm
+# Or directly:
+# bash scripts/setup-local-llm.sh
 ```
 
 ```powershell
@@ -51,6 +58,8 @@ Examples:
 .\scripts\sentinelops-dev.ps1 -Restart
 .\scripts\sentinelops-dev.ps1 -Stop
 .\scripts\sentinelops-dev.ps1 -Status
+.\scripts\sentinelops-dev.ps1 -SetupLlm
+# Or: .\\scripts\\setup-local-llm.ps1
 ```
 
 ## Modes
@@ -85,3 +94,7 @@ Environment variables:
 On **Linux**, unsupervised `sudo` is not run unless **`SENTINELOPS_APT_INSTALL=1`**. On **Windows**, **`winget` install/upgrade of Python** runs when it is on `PATH` and you did not pass **`-NoWingetPython`**.
 
 **Kali, Debian, Ubuntu (incl. WSL):** If you used **`sudo ./scripts/sentinelops-dev.sh`**, you may have root-owned `backend/.venv`. Fix: `sudo chown -R "$USER:$USER" backend ml frontend/node_modules` (as needed) or `rm -rf backend/.venv ml/.venv` and re-run **without** sudo. A broken venv with no `pip` is fixed the same way after installing **`python3-venv`** (and `python3.13-venv` on Kali 3.13) via apt.
+
+## Local LLM (Ollama / VAPT)
+
+Full install, environment variables, Docker host access, and troubleshooting: **[`docs/LOCAL_LLM.md`](../docs/LOCAL_LLM.md)**. Short path: `bash scripts/setup-local-llm.sh` or `.\scripts\setup-local-llm.ps1`, merge `/.env.llm.local.generated` into `.env`, restart the API, then use the VAPT page.

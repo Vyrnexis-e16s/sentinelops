@@ -59,12 +59,13 @@ async def vapt_llm_summarize(
     user: User = Depends(current_user),
     audit: AuditService = Depends(audit_logger),
 ) -> LlmSummarizeOut:
-    """Call configured OpenAI-compatible endpoint with your assembled context. No key → 503."""
+    """Call OpenAI-compatible endpoint (or two-step local cascade: draft + refine)."""
     try:
         summary, model = await llm_service.summarize_triage(
             context=payload.context,
             instruction=payload.instruction,
             inject_mitre_context=payload.inject_mitre_context,
+            use_cascade=payload.use_cascade,
         )
     except llm_service.LlmNotConfiguredError as exc:
         raise HTTPException(
@@ -86,6 +87,7 @@ async def vapt_llm_summarize(
             "model": model,
             "context_chars": len(payload.context),
             "mitre": payload.inject_mitre_context,
+            "cascade": payload.use_cascade and ("→" in model or "cascade" in model),
         },
     )
     await db.commit()

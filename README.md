@@ -66,6 +66,17 @@ Use the scripts in [`scripts/`](scripts/) to create Python **venv**s (`backend/.
 - **Windows (PowerShell):** `.\scripts\sentinelops-dev.ps1` — see [`scripts/README.md`](scripts/README.md) for `-Mode` and `-TryUpgradePython`.
 - **Linux / Ubuntu / WSL:** `chmod +x scripts/sentinelops-dev.sh && ./scripts/sentinelops-dev.sh` — the default `MODE=full` needs Docker running; `MODE=local` only prepares venvs/Node without compose. `SENTINELOPS_APT_INSTALL=1` on Ubuntu installs Python 3.12 + venv via apt (requires sudo).
 
+### Optional: local LLM (Ollama) for VAPT
+
+The **VAPT** view can call a **local** model through an OpenAI-compatible API ([Ollama](https://ollama.com) is the default path in-repo). You must **install Ollama first**; if `./scripts/sentinelops-dev.sh --setup-llm` or `setup-local-llm` reports *“Ollama is not on PATH”*, install it, then **open a new shell** (or `hash -r`) so `ollama` is on `PATH` — the installer often puts the binary in `/usr/local/bin`.
+
+| Platform | Install Ollama |
+|----------|----------------|
+| **Linux** (Kali, Ubuntu, Debian, Fedora, etc.) | Official install: run the `curl` command from [ollama.com](https://ollama.com) (it downloads and runs `install.sh` with `sh`). You get a systemd service, the `ollama` binary under `/usr/local`, and the API on `http://127.0.0.1:11434` (root/sudo for service install). See [Ollama’s Linux doc](https://github.com/ollama/ollama/blob/main/docs/linux.md). |
+| **Windows** | **Native Windows:** [Download the installer](https://ollama.com/download) and run it (Ollama runs in the system tray; API on `127.0.0.1:11434`). **WSL only:** do **not** use the Windows GUI installer for a Linux shell — use the same **Linux** `install.sh` **inside** WSL, or use Ollama for Windows and point the API in `.env` at the right host. |
+
+**After Ollama is installed and the `ollama` command works:** from the repo root run `./scripts/sentinelops-dev.sh --setup-llm` (Linux/macOS) or `.\scripts\setup-local-llm.ps1` (Windows), merge the generated `.env.llm.local.generated` into your `.env`, and restart the API. **Full** variable list, two-model **draft + refine** cascade, Docker-Compose host access, and troubleshooting: [`docs/LOCAL_LLM.md`](docs/LOCAL_LLM.md) (also linked from [`.env.example`](.env.example) and [`scripts/README.md`](scripts/README.md)).
+
 ## Portfolio proof (screenshots)
 
 Screenshots are stored as PNGs in [`docs/images/`](docs/images/). For best results, capture **after** `make up` and `make seed`, while signed in (or with a dev JWT) so the API-backed panels are populated. Optional extras you can add the same way: `05-vault.png` (`/vault`), `06-api-docs.png` (`http://localhost:8000/docs`), `07-metrics.png` (`/metrics` with `EXPOSE_PROMETHEUS=true`), `08-command-palette.png` (⌘K / Ctrl+K on any page), `09-themes.png` (Tactical vs Quantum Aurora).

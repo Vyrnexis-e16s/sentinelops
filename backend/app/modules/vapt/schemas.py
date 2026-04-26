@@ -39,6 +39,10 @@ class LlmSummarizeIn(BaseModel):
         default=False,
         description="Append a curated MITRE technique reference list to the system prompt (no live MITRE API call).",
     )
+    use_cascade: bool = Field(
+        default=True,
+        description="If the server has SENTINELOPS_LLM_DRAFT_MODEL set, run draft then refine; set false for a single call.",
+    )
 
 
 class LlmSummarizeOut(BaseModel):

@@ -25,6 +25,9 @@ for arg in "$@"; do
     --logs)        ACTION="logs" ;;
     --migrate)     ACTION="migrate" ;;
     --smoke)       ACTION="smoke" ;;
+    --setup-llm)   ACTION="setup-llm" ;;
+    --bootstrap)  ACTION="bootstrap" ;;
+    --auto)         export SENTINELOPS_AUTO_INSTALL=1 ;;
     --all)         ACTION="run"; FORCE_BUILD=1; RUN_SEED=1 ;;
     *) ;;  # unknown flags are ignored to stay forward-compatible
   esac
@@ -53,6 +56,9 @@ Lifecycle commands:
   --logs       Tail the last 200 lines of every service.
   --migrate    Run alembic upgrade head in the running backend container (DB migrations).
   --smoke      Run scripts/_smoke-all-tools.sh (expects API on localhost:8000, bash + curl + python3).
+  --setup-llm  Run scripts/setup-local-llm.sh (Ollama: detect, pull two models, write .env snippet).
+  --bootstrap  Print/check prerequisites (or install if --auto / SENTINELOPS_AUTO_INSTALL=1; Linux apt only).
+  --auto         Set SENTINELOPS_AUTO_INSTALL=1 for this run: apt installs Docker/Node/Python gaps on Debian/Ubuntu/Kali.
   --help, -h   Show this message and exit.
 
 Modes (default = setup; MODE env var):
@@ -71,6 +77,9 @@ Examples:
   ./scripts/sentinelops-dev.sh --status        # see what is running
   ./scripts/sentinelops-dev.sh --migrate       # apply DB migrations in the backend container
   ./scripts/sentinelops-dev.sh --smoke         # end-to-end API smoke (bash + stack on :8000)
+  ./scripts/sentinelops-dev.sh --setup-llm     # Ollama local LLM (draft + refine models)
+  ./scripts/sentinelops-dev.sh --bootstrap     # what is missing (no sudo)
+  ./scripts/sentinelops-dev.sh --all --auto    # full + apt auto-install of Docker/Node/Python (Linux apt)
   MODE=local ./scripts/sentinelops-dev.sh      # venv + node only
 HELP
 }
@@ -95,6 +104,22 @@ fi
 if [[ ! -f "$REPO_ROOT/.env" && -f "$REPO_ROOT/.env.example" ]]; then
   cp "$REPO_ROOT/.env.example" "$REPO_ROOT/.env"
   log "Created .env from .env.example"
+fi
+
+# --- bootstrap only: check or apt-install prerequisites (no venv/Docker from main script yet) ---
+if [[ "$ACTION" == "bootstrap" ]]; then
+  BP="${REPO_ROOT}/scripts/bootstrap-prereqs.sh"
+  if [[ ! -f "$BP" ]]; then
+    logerr "Missing $BP"
+    exit 1
+  fi
+  if [[ "${SENTINELOPS_AUTO_INSTALL:-0}" == "1" ]]; then
+    bash "$BP" 2>&1 | tee -a "$LOG_FILE"
+  else
+    bash "$BP" --check 2>&1 | tee -a "$LOG_FILE"
+  fi
+  rc=${PIPESTATUS[0]}
+  exit "$rc"
 fi
 
 # 'docker compose' (v2) or legacy 'docker-compose' (v1)
@@ -239,6 +264,20 @@ if [[ "$ACTION" == "smoke" ]]; then
   exit ${PIPESTATUS[0]}
 fi
 
+if [[ "$ACTION" == "setup-llm" ]]; then
+  if ! command -v bash >/dev/null 2>&1; then
+    logerr "bash is required"
+    exit 1
+  fi
+  SH_LLM="${REPO_ROOT}/scripts/setup-local-llm.sh"
+  if [[ ! -f "$SH_LLM" ]]; then
+    logerr "Missing $SH_LLM"
+    exit 1
+  fi
+  (cd "$REPO_ROOT" && bash ./scripts/setup-local-llm.sh) 2>&1 | tee -a "$LOG_FILE"
+  exit ${PIPESTATUS[0]}
+fi
+
 if [[ "$MODE" == "docker" ]]; then
   if ! command -v docker >/dev/null 2>&1; then
     logerr "Install Docker: https://docs.docker.com/engine/install/"
@@ -256,6 +295,20 @@ if [[ "$MODE" == "docker" ]]; then
   fi
   log "http://localhost:3000  |  http://localhost:8000/docs"
   exit 0
+fi
+
+# --- optional apt bootstrap (with --auto), before venvs ---
+if [[ "${SENTINELOPS_AUTO_INSTALL:-0}" == "1" ]] && command -v apt-get >/dev/null 2>&1; then
+  BP="${REPO_ROOT}/scripts/bootstrap-prereqs.sh"
+  if [[ -f "$BP" ]]; then
+    log "SENTINELOPS_AUTO_INSTALL=1: running $BP (apt/sudo)…"
+    bash "$BP" 2>&1 | tee -a "$LOG_FILE"
+    rc=${PIPESTATUS[0]}
+    if [[ "$rc" -ne 0 ]]; then
+      logerr "bootstrap-prereqs.sh failed (exit $rc). Remove --auto or fix apt/sudo, then re-run."
+      exit 1
+    fi
+  fi
 fi
 
 # --- find Python 3.11+ ---

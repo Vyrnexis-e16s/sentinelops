@@ -31,7 +31,10 @@ param(
   [switch] $Logs,
   [switch] $Migrate,
   [switch] $Smoke,
+  [switch] $SetupLlm,
   [switch] $All,
+  [switch] $Auto,
+  [switch] $Bootstrap,
   [switch] $Help
 )
 
@@ -59,6 +62,9 @@ Lifecycle commands:
   -Logs       Tail the last 200 lines of every service.
   -Migrate    Run 'alembic upgrade head' in the running backend container.
   -Smoke      Run scripts/_smoke-all-tools.sh (WSL/bash or Git Bash; API on :8000).
+  -SetupLlm   Run scripts/setup-local-llm.ps1 (Ollama: find binary, pull two models, write .env snippet).
+  -Auto       SENTINELOPS_AUTO_INSTALL for this run: on Windows, winget Node (and in full flow) if missing; use with -All for full + auto deps where supported.
+  -Bootstrap  Check Python/Node/Docker, optionally install via winget when -Auto; then exit. Linux/WSL: use bash script --bootstrap instead.
   -Help       Show this message and exit.
 
 Modes (default = setup):
@@ -78,6 +84,7 @@ Examples:
   .\scripts\sentinelops-dev.ps1 -Status        # see what is running
   .\scripts\sentinelops-dev.ps1 -Migrate       # alembic upgrade head in backend container
   .\scripts\sentinelops-dev.ps1 -Smoke         # API smoke (WSL or bash on PATH)
+  .\scripts\sentinelops-dev.ps1 -SetupLlm     # Ollama: pull qwen2.5 + llama3.1, write .env snippet
 "@ | Write-Host
   exit 0
 }
@@ -260,6 +267,9 @@ if ($All) {
   $script:ForceBuild = $true
   $script:RunSeed = $true
 }
+if ($Auto) {
+  $env:SENTINELOPS_AUTO_INSTALL = "1"
+}
 
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
 Log "PowerShell $psv ($shellKind) | Mode=$Mode | Repo=$RepoRoot | Log=$LogFile"
@@ -286,8 +296,8 @@ function Wait-BackendHealth {
   Log "Backend /health did not return OK within ~60s (it may still be migrating). Check: docker compose -f infra/docker/docker-compose.yml logs backend" "WARN"
 }
 
-# --- lifecycle: -Stop / -Restart / -Status / -Logs / -Migrate / -Smoke (short-circuit setup) ---
-if ($Stop -or $Restart -or $Status -or $Logs -or $Migrate -or $Smoke) {
+# --- lifecycle: -Stop / -Restart / -Status / -Logs / -Migrate / -Smoke / -SetupLlm (short-circuit) ---
+if ($Stop -or $Restart -or $Status -or $Logs -or $Migrate -or $Smoke -or $SetupLlm) {
   if (-not (Test-DockerEngine)) {
     Log "Docker is not installed or the engine is not running. Start Docker Desktop, then retry." "ERROR"
     exit 1
@@ -340,8 +350,14 @@ if ($Stop -or $Restart -or $Status -or $Logs -or $Migrate -or $Smoke) {
       Pop-Location
       exit $c
     }
-    Log "Install WSL or add Git Bash to PATH to run the smoke script, or run it from Linux/WSL." "ERROR"
+    Log "Install WSL or add Git Bash to run the smoke script, or use Linux/WSL." "ERROR"
     exit 1
+  }
+  if ($SetupLlm) {
+    $ps1 = Join-Path $ScriptDir "setup-local-llm.ps1"
+    if (-not (Test-Path -LiteralPath $ps1)) { Log "Missing $ps1" "ERROR"; exit 1 }
+    & $ps1
+    exit $LASTEXITCODE
   }
 }
 
@@ -372,6 +388,38 @@ function Get-PythonPath {
     if ($LASTEXITCODE -eq 0 -and $out) { return $out.Trim() }
   }
   return $null
+}
+
+# --- -Bootstrap: report and optional winget, then exit (before full setup) ---
+if ($Bootstrap) {
+  Log "— Prerequisite check (this machine) —"
+  $pyTry = Get-PythonPath
+  if ($pyTry) { Log "Python 3.11+: OK  $pyTry" } else { Log "Python 3.11+: MISSING" "WARN" }
+  if (HasCmd "node") { Log "Node: $(node -v)" } else { Log "Node: MISSING" "WARN" }
+  if (Test-DockerEngine) { Log "Docker: engine OK" } else { Log "Docker: not available or not running" "WARN" }
+  if ($Auto -and (HasCmd "winget")) {
+    if (-not (HasCmd "node")) {
+      Log "AUTO: winget install OpenJS.NodeJS.LTS"
+      $ErrorActionPreference = "Continue"
+      winget install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements 2>&1 | Tee-Object -FilePath $LogFile -Append
+      $ErrorActionPreference = "Stop"
+      Sync-MachinePath
+    }
+    if (-not (Get-PythonPath) -and -not $NoWingetPython) {
+      Log "AUTO: winget install Python.Python.3.12"
+      $ErrorActionPreference = "Continue"
+      winget install -e --id Python.Python.3.12 --accept-source-agreements --accept-package-agreements 2>&1 | Tee-Object -FilePath $LogFile -Append
+      $ErrorActionPreference = "Stop"
+      Sync-MachinePath
+    }
+    if (-not (Test-DockerEngine)) {
+      Log "For Docker: https://docs.docker.com/desktop/install/windows-install/  or: winget install -e --id Docker.DockerDesktop" "WARN"
+    }
+  } elseif ($Auto) {
+    Log "AUTO set but winget not on PATH; install tools manually, or use WSL + bash scripts with --auto." "WARN"
+  }
+  Log "On apt Linux:  SENTINELOPS_AUTO_INSTALL=1 ./scripts/sentinelops-dev.sh --all --auto"
+  exit 0
 }
 
 $PythonPath = Get-PythonPath
@@ -442,6 +490,13 @@ if (Test-Path $mlreq) {
 }
 
 # --- Node 20+ (Next.js 16 / frontend) ---
+if (-not (HasCmd "node") -and $env:SENTINELOPS_AUTO_INSTALL -eq "1" -and (HasCmd "winget")) {
+  Log "AUTO: installing Node.js LTS via winget…"
+  $ErrorActionPreference = "Continue"
+  winget install -e --id OpenJS.NodeJS.LTS --accept-source-agreements --accept-package-agreements 2>&1 | Tee-Object -FilePath $LogFile -Append
+  $ErrorActionPreference = "Stop"
+  Sync-MachinePath
+}
 if (-not (HasCmd "node")) {
   Log "Install Node 20+ (nodejs.org) or: winget install OpenJS.NodeJS.LTS" "ERROR"
   exit 1
