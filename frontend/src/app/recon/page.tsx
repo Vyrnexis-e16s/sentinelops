@@ -17,6 +17,17 @@ import { runDeferred } from "@/lib/schedule-deferred";
 type JobKind = "subdomain" | "port" | "cve" | "webfuzz";
 type TargetKind = "domain" | "host" | "cidr";
 
+/** Port scan dropdown: `full` omits the list so the API uses the server default (broad). */
+type PortScanPreset = "full" | "web" | "databases" | "remote" | "custom";
+
+const PORT_PRESET_WEB: number[] = [
+  80, 443, 3000, 5000, 8000, 8008, 8080, 8081, 8443, 8888, 9000, 9443, 3001, 8880
+];
+const PORT_PRESET_DATABASES: number[] = [
+  1433, 1434, 1521, 1522, 3050, 3306, 3307, 5000, 5432, 5433, 5500, 5601, 5984, 6379, 7000, 7001, 8000, 11211, 27017, 27018, 27019, 9042, 9200, 9300, 50000
+];
+const PORT_PRESET_REMOTE: number[] = [22, 23, 135, 139, 445, 2049, 3389, 5800, 5801, 5900, 5985, 5986, 10000];
+
 function inferTargetKind(value: string): TargetKind {
   const v = value.trim();
   if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\/\d{1,2}$/.test(v)) {
@@ -87,7 +98,8 @@ export default function ReconPage() {
   const [target, setTarget] = useState("");
   const [selectedKind, setSelectedKind] = useState<JobKind>("subdomain");
   const [cpe, setCpe] = useState("");
-  const [ports, setPorts] = useState("80,443,8080,8443");
+  const [portPreset, setPortPreset] = useState<PortScanPreset>("full");
+  const [ports, setPorts] = useState("80,443,8080,8443,8081,9443");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -148,6 +160,18 @@ export default function ReconPage() {
 
   const buildParams = (kind: JobKind, v: string): Record<string, unknown> => {
     if (kind === "port") {
+      if (portPreset === "full") {
+        return {};
+      }
+      if (portPreset === "web") {
+        return { ports: [...new Set(PORT_PRESET_WEB)] };
+      }
+      if (portPreset === "databases") {
+        return { ports: [...new Set(PORT_PRESET_DATABASES)] };
+      }
+      if (portPreset === "remote") {
+        return { ports: [...new Set(PORT_PRESET_REMOTE)] };
+      }
       const parsed = ports
         .split(/[,\s]+/)
         .map((p) => Number.parseInt(p, 10))
@@ -264,14 +288,31 @@ export default function ReconPage() {
             </select>
           </div>
           {selectedKind === "port" && (
+            <div className="min-w-[200px]">
+              <label className="text-[11px] text-muted uppercase tracking-wider">Port profile</label>
+              <select
+                value={portPreset}
+                onChange={(e) => setPortPreset(e.target.value as PortScanPreset)}
+                disabled={busy}
+                className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-2 text-sm outline-none focus:border-accent/60"
+              >
+                <option value="full">Full (server list — web, DB, remote…)</option>
+                <option value="web">Web &amp; app APIs</option>
+                <option value="databases">Databases &amp; caches</option>
+                <option value="remote">Remote / admin (SSH, RDP, SMB, …)</option>
+                <option value="custom">Custom (comma‑separated)</option>
+              </select>
+            </div>
+          )}
+          {selectedKind === "port" && portPreset === "custom" && (
             <div className="min-w-[220px]">
-              <label className="text-[11px] text-muted uppercase tracking-wider">Ports</label>
+              <label className="text-[11px] text-muted uppercase tracking-wider">Custom ports</label>
               <input
                 value={ports}
                 onChange={(e) => setPorts(e.target.value)}
                 disabled={busy}
                 className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-2 text-sm font-mono outline-none focus:border-accent/60"
-                placeholder="80,443,8080"
+                placeholder="80,443,3306,5432,27017"
               />
             </div>
           )}
@@ -304,8 +345,10 @@ export default function ReconPage() {
           </button>
         </div>
         <p className="text-[11px] text-muted mt-3">
-          Subdomain → a domain (example.com). Port scan → single host or IP. CVE → full CPE 2.3 or
-          shortcut like <span className="font-mono">nginx:1.25.3</span>. Web fuzz → http(s) URL or host.
+          Subdomain → a domain (example.com). Port scan → single host or IP; use{" "}
+          <span className="text-fg/90">Full</span> for the broad server list (includes common DB
+          services), or narrow with Web / Databases / Remote. CVE → full CPE 2.3 or shortcut like{" "}
+          <span className="font-mono">nginx:1.25.3</span>. Web fuzz → http(s) URL or host.
         </p>
       </div>
 
