@@ -18,7 +18,7 @@ from app.core.db import dispose_engine, get_session_factory
 from app.core.logging import get_logger
 from app.core.redis import init_redis
 from app.modules.recon.models import Finding, ReconJob
-from app.modules.recon.services.cve import query_cves
+from app.modules.recon.services.cve import is_bare_fqdn_not_cpe, query_cves
 from app.modules.recon.services.dns_recon import collect_records as collect_dns
 from app.modules.recon.services.httprobe import probe as httprobe_urls
 from app.modules.recon.services.http_headers import check_security_headers
@@ -180,7 +180,41 @@ async def _run_cve(job_id: str, target: str, params: dict[str, Any]) -> dict[str
     await dispose_engine()
     factory = get_session_factory()
     redis = await init_redis()
-    cpe = params.get("cpe") or target
+    cpe = (params.get("cpe") or target or "").strip()
+    if is_bare_fqdn_not_cpe(cpe):
+        body = (
+            "CVE jobs query the NIST NVD by CPE, not by domain alone. Use job params, e.g. "
+            "`cpe:2.3:a:vendor:product:1.0:*:*:*:*:*:*:*` or a shortcut `nginx:1.25`, "
+            "or run a port/HTTP job first to choose a CPE. "
+            "Set NVD_API_KEY in the API for higher rate limits."
+        )
+        async with factory() as db:
+            job = await _claim_for_run(db, uuid.UUID(job_id))
+            if job is None:
+                return {"error": "missing_or_already_handled"}
+            await _persist_findings(
+                db,
+                uuid.UUID(job_id),
+                [
+                    {
+                        "severity": "info",
+                        "title": f"CVE scan skipped: bare domain {cpe!r} is not a CPE",
+                        "description": body,
+                        "evidence": {"target": cpe, "kind": "hint"},
+                    }
+                ],
+            )
+            job.result_json = {
+                "skipped": True,
+                "reason": "bare_fqdn",
+                "cpe": cpe,
+                "hint": body,
+            }
+            await _set_status(db, uuid.UUID(job_id), "done")
+            await db.commit()
+        await publish(CHANNEL_RECON, {"job_id": job_id, "kind": "cve", "count": 0})
+        return {"cves": 0, "skipped": "bare_fqdn"}
+
     async with factory() as db:
         job = await _claim_for_run(db, uuid.UUID(job_id))
         if job is None:
@@ -193,7 +227,7 @@ async def _run_cve(job_id: str, target: str, params: dict[str, Any]) -> dict[str
             log.exception("recon.cve.failed", job_id=job_id, error=str(exc))
             return {"error": str(exc)}
 
-        findings = [
+        findings: list[dict[str, Any]] = [
             {
                 "severity": v.get("severity", "unknown"),
                 "title": f"{v['cve_id']} affects {cpe}",
@@ -203,13 +237,26 @@ async def _run_cve(job_id: str, target: str, params: dict[str, Any]) -> dict[str
             for v in summary.get("vulnerabilities", [])
             if v.get("cve_id")
         ]
+        nvd_err = summary.get("error")
+        if nvd_err and not findings:
+            findings.append(
+                {
+                    "severity": "info",
+                    "title": "NVD query returned no CVEs",
+                    "description": str(nvd_err),
+                    "evidence": {"cpe": summary.get("cpe", cpe), "nvd_error": nvd_err},
+                }
+            )
         await _persist_findings(db, uuid.UUID(job_id), findings)
         job.result_json = summary
         await _set_status(db, uuid.UUID(job_id), "done")
         await db.commit()
 
-    await publish(CHANNEL_RECON, {"job_id": job_id, "kind": "cve", "count": len(findings)})
-    return {"cves": len(findings)}
+    cve_only = len(
+        [f for f in findings if isinstance(f.get("evidence"), dict) and f["evidence"].get("cve_id")]
+    )
+    await publish(CHANNEL_RECON, {"job_id": job_id, "kind": "cve", "count": cve_only or len(findings)})
+    return {"cves": cve_only}
 
 
 async def _run_webfuzz(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:

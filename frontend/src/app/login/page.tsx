@@ -60,8 +60,10 @@ type PublicKeyCredentialCreationOptionsJSON = {
 };
 
 function errMsg(e: unknown): string {
-  if (e && typeof e === "object" && "detail" in e) {
-    return String((e as ApiError).detail || "Request failed");
+  if (e && typeof e === "object") {
+    const a = e as ApiError & { message?: string };
+    if (typeof a.detail === "string" && a.detail) return a.detail;
+    if (typeof a.message === "string" && a.message) return a.message;
   }
   if (e instanceof Error) return e.message;
   return "Unknown error";
@@ -82,6 +84,7 @@ function LoginPageInner() {
   const router = useRouter();
   const search = useSearchParams();
   const next = search.get("next") || "/dashboard";
+  const sessionExpired = search.get("session") === "expired";
 
   const [method, setMethod] = useState<Method>("passkey");
   const [mode, setMode] = useState<Mode>("login");
@@ -238,6 +241,12 @@ function LoginPageInner() {
             </div>
           </div>
         </div>
+
+        {sessionExpired && (
+          <p className="text-sm text-amber-200/90 border border-amber-500/30 rounded-lg px-3 py-2 mb-4 bg-amber-950/20">
+            Your session ended (JWT expired or signed out). Sign in again to continue where you left off.
+          </p>
+        )}
 
         {/* Method (passkey vs password) */}
         <div className="grid grid-cols-2 gap-1 mb-3 p-1 rounded-md bg-panel/60 border border-border/60">

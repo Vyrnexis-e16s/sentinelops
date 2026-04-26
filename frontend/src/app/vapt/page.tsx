@@ -31,6 +31,7 @@ import {
   type VaptSurface,
   type VaptTtpMemory
 } from "@/lib/api";
+import { getApiErrorMessage, isUnauthorized, redirectToReauth } from "@/lib/api-auth";
 import { runDeferred } from "@/lib/schedule-deferred";
 
 export default function VaptPage() {
@@ -89,12 +90,11 @@ export default function VaptPage() {
       setFeedback(fb.items);
       setMitre(m);
     } catch (e) {
-      const a = e as ApiError;
-      if (a.status === 401) {
-        setErr("Sign in to use the VAPT command view.");
-      } else {
-        setErr(a.detail || "Failed to load VAPT data.");
+      if (isUnauthorized(e)) {
+        redirectToReauth();
+        return;
       }
+      setErr(getApiErrorMessage(e, "Failed to load VAPT data."));
     } finally {
       setBusy((b) => ({ ...b, load: false }));
     }
@@ -111,33 +111,57 @@ export default function VaptPage() {
     try {
       const [s, f, a, i] = await Promise.all([
         api.get<VaptSurface>("/api/v1/vapt/surface"),
-        api.get<Paginated<ReconFinding>>("/api/v1/recon/findings?size=40"),
+        api.get<Paginated<ReconFinding>>("/api/v1/recon/findings?size=120"),
         api.get<Paginated<Alert>>("/api/v1/siem/alerts?size=15"),
         api.get<Inference[]>("/api/v1/ids/inferences?limit=25")
       ]);
       setSurface(s);
-      const block = {
-        vapt_surface: s,
-        recon_findings_excerpt: f.items.map((x) => ({
+      const seen = new Set<string>();
+      const reconDedup: { severity: string; title: string; description: string }[] = [];
+      for (const x of f.items) {
+        // Dedupe by title so repeated port/webfuzz rows across jobs don’t fill the excerpt.
+        const key = x.title;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        reconDedup.push({
           severity: x.severity,
           title: x.title,
           description: (x.description || "").slice(0, 500)
-        })),
+        });
+        if (reconDedup.length >= 40) break;
+      }
+      const block = {
+        vapt_surface: s,
+        recon_findings_excerpt: reconDedup,
         siem_alerts_excerpt: a.items.map((x) => ({
           rule: x.rule_name,
           score: x.score,
           status: x.status
         })),
-        ids_inferences_excerpt: i.map((x) => ({
-          label: x.label,
-          prediction: x.prediction,
-          probability: x.probability
-        }))
+        ids_inferences_excerpt: (() => {
+          const s = new Set<string>();
+          const out: { label: string; prediction: string; probability: number }[] = [];
+          for (const x of i) {
+            const k = `${x.label}\t${x.prediction}\t${x.probability}`;
+            if (s.has(k)) continue;
+            s.add(k);
+            out.push({
+              label: x.label,
+              prediction: x.prediction,
+              probability: x.probability
+            });
+            if (out.length >= 15) break;
+          }
+          return out;
+        })()
       };
       setCtx(JSON.stringify(block, null, 2));
     } catch (e) {
-      const a = e as ApiError;
-      setErr(a.detail || "Could not assemble context from the API.");
+      if (isUnauthorized(e)) {
+        redirectToReauth();
+        return;
+      }
+      setErr(getApiErrorMessage(e, "Could not assemble context from the API."));
     } finally {
       setBusy((b) => ({ ...b, load: false }));
     }
@@ -161,13 +185,22 @@ export default function VaptPage() {
       setOut(r.summary);
       setLlmModel(r.model);
     } catch (e) {
+      if (isUnauthorized(e)) {
+        redirectToReauth();
+        return;
+      }
       const a = e as ApiError;
       if (a.status === 503) {
         setErr(
           `${a.detail} For cloud: OPENAI_API_KEY. For Ollama: run ./scripts/sentinelops-dev.sh --setup-llm (or scripts/setup-local-llm.ps1), merge .env.llm.local.generated, set SENTINELOPS_LLM_OLLAMA=1, restart the API.`
         );
+      } else if (a.status === 502) {
+        setErr(
+          a.detail ||
+            "LLM endpoint error (check Ollama is running, base URL, and models are pulled)."
+        );
       } else {
-        setErr(a.detail || "LLM call failed.");
+        setErr(getApiErrorMessage(e, "LLM call failed."));
       }
     } finally {
       setBusy((b) => ({ ...b, gen: false }));
@@ -182,8 +215,11 @@ export default function VaptPage() {
       const row = await api.post<VaptBrief>("/api/v1/vapt/briefs", { title, body: out });
       setBriefs((prev) => [row, ...prev]);
     } catch (e) {
-      const a = e as ApiError;
-      setErr(a.detail || "Save failed — run `alembic upgrade head` if the table is missing.");
+      if (isUnauthorized(e)) {
+        redirectToReauth();
+        return;
+      }
+      setErr(getApiErrorMessage(e, "Save failed — run `alembic upgrade head` if the table is missing."));
     } finally {
       setSaving(false);
     }
@@ -196,8 +232,11 @@ export default function VaptPage() {
       await api.del(`/api/v1/vapt/briefs/${id}`);
       setBriefs((prev) => prev.filter((b) => b.id !== id));
     } catch (e) {
-      const a = e as ApiError;
-      setErr(a.detail || "Delete failed.");
+      if (isUnauthorized(e)) {
+        redirectToReauth();
+        return;
+      }
+      setErr(getApiErrorMessage(e, "Delete failed."));
     } finally {
       setBusy((b) => ({ ...b, del: null }));
     }
@@ -219,8 +258,11 @@ export default function VaptPage() {
         return [row, ...rest];
       });
     } catch (e) {
-      const a = e as ApiError;
-      setErr(a.detail || "TTP save failed — run DB migrations if the table is missing.");
+      if (isUnauthorized(e)) {
+        redirectToReauth();
+        return;
+      }
+      setErr(getApiErrorMessage(e, "TTP save failed — run DB migrations if the table is missing."));
     } finally {
       setTtpBusy(false);
     }
@@ -232,8 +274,11 @@ export default function VaptPage() {
       await api.del(`/api/v1/vapt/ttp/${id}`);
       setTtpRows((prev) => prev.filter((x) => x.id !== id));
     } catch (e) {
-      const a = e as ApiError;
-      setErr(a.detail || "Delete TTP failed.");
+      if (isUnauthorized(e)) {
+        redirectToReauth();
+        return;
+      }
+      setErr(getApiErrorMessage(e, "Delete TTP failed."));
     }
   };
 
@@ -249,8 +294,11 @@ export default function VaptPage() {
       });
       setEdges((prev) => [row, ...prev]);
     } catch (e) {
-      const a = e as ApiError;
-      setErr(a.detail || "Add edge failed.");
+      if (isUnauthorized(e)) {
+        redirectToReauth();
+        return;
+      }
+      setErr(getApiErrorMessage(e, "Add edge failed."));
     } finally {
       setEBusy(false);
     }
@@ -262,8 +310,11 @@ export default function VaptPage() {
       await api.del(`/api/v1/vapt/graph/edges/${id}`);
       setEdges((prev) => prev.filter((x) => x.id !== id));
     } catch (e) {
-      const a = e as ApiError;
-      setErr(a.detail || "Delete edge failed.");
+      if (isUnauthorized(e)) {
+        redirectToReauth();
+        return;
+      }
+      setErr(getApiErrorMessage(e, "Delete edge failed."));
     }
   };
 
@@ -273,8 +324,11 @@ export default function VaptPage() {
       const c = await api.get<VaptCypherExport>("/api/v1/vapt/graph/cypher");
       setCypher(c);
     } catch (e) {
-      const a = e as ApiError;
-      setErr(a.detail || "Cypher export failed.");
+      if (isUnauthorized(e)) {
+        redirectToReauth();
+        return;
+      }
+      setErr(getApiErrorMessage(e, "Cypher export failed."));
     }
   };
 
@@ -299,8 +353,11 @@ export default function VaptPage() {
       });
       setOrchOut(r);
     } catch (e) {
-      const a = e as ApiError;
-      setErr(a.detail || "Orchestrate failed (allowlist / worker / queue).");
+      if (isUnauthorized(e)) {
+        redirectToReauth();
+        return;
+      }
+      setErr(getApiErrorMessage(e, "Orchestrate failed (allowlist / worker / queue)."));
     } finally {
       setOrchBusy(false);
     }
@@ -319,8 +376,11 @@ export default function VaptPage() {
       setFeedback((prev) => [row, ...prev]);
       setFbBody("");
     } catch (e) {
-      const a = e as ApiError;
-      setErr(a.detail || "Feedback save failed.");
+      if (isUnauthorized(e)) {
+        redirectToReauth();
+        return;
+      }
+      setErr(getApiErrorMessage(e, "Feedback save failed."));
     } finally {
       setFbBusy(false);
     }
@@ -332,8 +392,11 @@ export default function VaptPage() {
       await api.del(`/api/v1/vapt/feedback/${id}`);
       setFeedback((prev) => prev.filter((x) => x.id !== id));
     } catch (e) {
-      const a = e as ApiError;
-      setErr(a.detail || "Delete feedback failed.");
+      if (isUnauthorized(e)) {
+        redirectToReauth();
+        return;
+      }
+      setErr(getApiErrorMessage(e, "Delete feedback failed."));
     }
   };
 

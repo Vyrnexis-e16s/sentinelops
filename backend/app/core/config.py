@@ -47,7 +47,8 @@ class Settings(BaseSettings):
 
     # --- Auth ---
     jwt_algorithm: str = Field("HS256", alias="JWT_ALGORITHM")
-    jwt_expire_minutes: int = Field(60, alias="JWT_EXPIRE_MINUTES")
+    # Long sessions reduce “token expired” during long assessments; override in production.
+    jwt_expire_minutes: int = Field(480, alias="JWT_EXPIRE_MINUTES")
     webauthn_rp_id: str = Field("localhost", alias="WEBAUTHN_RP_ID")
     webauthn_rp_name: str = Field("SentinelOps", alias="WEBAUTHN_RP_NAME")
     webauthn_origin: str = Field("http://localhost:3000", alias="WEBAUTHN_ORIGIN")
@@ -58,12 +59,16 @@ class Settings(BaseSettings):
 
     # --- Recon ---
     recon_max_concurrency: int = Field(50, alias="RECON_MAX_CONCURRENCY")
-    recon_timeout_seconds: int = Field(5, alias="RECON_TIMEOUT_SECONDS")
+    # Default I/O to remote hosts; NVD uses nvd_request_timeout instead.
+    recon_timeout_seconds: int = Field(15, alias="RECON_TIMEOUT_SECONDS")
     # Comma/space-separated. Empty = any target (dev). Example: "scanme.nmap.org,10.0.0.0/8,192.168.1.0/24"
     recon_target_allowlist: str = Field("", alias="RECON_TARGET_ALLOWLIST")
     nvd_api_base: str = Field(
         "https://services.nvd.nist.gov/rest/json/cves/2.0", alias="NVD_API_BASE"
     )
+    # https://nvd.nist.gov/developers/request-an-api-key — higher rate limit; optional
+    nvd_api_key: str = Field("", alias="NVD_API_KEY")
+    nvd_request_timeout: float = Field(90.0, alias="NVD_REQUEST_TIMEOUT")
 
     # --- IDS ---
     ids_model_path: str = Field("/app/ml/artifacts/ids_rf.joblib", alias="IDS_MODEL_PATH")

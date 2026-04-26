@@ -1,3 +1,5 @@
+import { isJwtExpired, isLikelyJwt } from "@/lib/jwt-helpers";
+
 const TOKEN_KEY = "sentinelops_access_token";
 
 /** Custom DOM event fired whenever the access token is set or cleared.
@@ -28,11 +30,26 @@ function readNextPublic(name: "NEXT_PUBLIC_DEV_TOKEN"): string | null {
  * After WebAuthn login, persist the JWT here so `fetch` and WebSocket can attach it.
  * Also accept `NEXT_PUBLIC_DEV_TOKEN` in `.env.local` for local development.
  */
+function freshTokenOrNull(raw: string | null): string | null {
+  if (!raw || !raw.trim()) return null;
+  const t = raw.trim();
+  if (isLikelyJwt(t) && isJwtExpired(t)) {
+    return null;
+  }
+  return t;
+}
+
 export function getAccessToken(): string | null {
   if (typeof window === "undefined") {
-    return readNextPublic("NEXT_PUBLIC_DEV_TOKEN");
+    return freshTokenOrNull(readNextPublic("NEXT_PUBLIC_DEV_TOKEN"));
   }
-  return localStorage.getItem(TOKEN_KEY) || readNextPublic("NEXT_PUBLIC_DEV_TOKEN");
+  const fromLs = localStorage.getItem(TOKEN_KEY);
+  const a = freshTokenOrNull(fromLs);
+  if (fromLs && a === null && isLikelyJwt(fromLs)) {
+    clearAccessToken();
+  }
+  if (a) return a;
+  return freshTokenOrNull(readNextPublic("NEXT_PUBLIC_DEV_TOKEN"));
 }
 
 export function setAccessToken(token: string) {

@@ -37,6 +37,15 @@ async function request<T>(
     } catch {
       detail = res.statusText;
     }
+    // Auth routes can 401 for wrong password — keep their detail. Normalize JWT/session 401s elsewhere.
+    const isAuthCall = /\/api\/v1\/auth\//.test(path);
+    if (
+      res.status === 401 &&
+      !isAuthCall &&
+      /invalid token|signature|expired|missing authorization|not authenticated|bearer|jwt/i.test(detail)
+    ) {
+      detail = "Your session expired. Please sign in again.";
+    }
     const err: ApiError = { status: res.status, detail };
     throw err;
   }
@@ -152,10 +161,18 @@ export async function vaultUpload(file: File): Promise<VaultObject> {
   if (!res.ok) {
     let detail: string;
     try {
-      const body = (await res.json()) as { detail?: string };
-      detail = body?.detail || res.statusText;
+      const body = (await res.json()) as { detail?: string; message?: string };
+      detail =
+        typeof body?.detail === "string"
+          ? body.detail
+          : typeof body?.message === "string"
+            ? body.message
+            : res.statusText;
     } catch {
       detail = res.statusText;
+    }
+    if (res.status === 401) {
+      detail = "Your session expired. Please sign in again.";
     }
     throw { status: res.status, detail } satisfies ApiError;
   }
@@ -171,10 +188,18 @@ export async function vaultDownloadBlob(objectId: string): Promise<Blob> {
   if (!res.ok) {
     let detail: string;
     try {
-      const body = (await res.json()) as { detail?: string };
-      detail = body?.detail || res.statusText;
+      const body = (await res.json()) as { detail?: string; message?: string };
+      detail =
+        typeof body?.detail === "string"
+          ? body.detail
+          : typeof body?.message === "string"
+            ? body.message
+            : res.statusText;
     } catch {
       detail = res.statusText;
+    }
+    if (res.status === 401) {
+      detail = "Your session expired. Please sign in again.";
     }
     throw { status: res.status, detail } satisfies ApiError;
   }

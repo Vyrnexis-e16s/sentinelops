@@ -7,6 +7,10 @@ Accepts three forms of input:
 * ``product``, ``product:version``, or ``vendor:product:version`` shortcut –
   expanded into a CPE 2.3 match string and sent as ``virtualMatchString`` so
   the NVD API performs partial matching with range semantics.
+
+**Not supported as CPE input:** a bare FQDN such as ``example.com`` — use
+``vendor:product:version`` or a full CPE; otherwise the worker short-circuits
+with a hint finding.
 """
 from __future__ import annotations
 
@@ -26,6 +30,18 @@ CACHE_TTL = 60 * 60 * 24  # 24h
 CACHE_PREFIX = "recon:cve:"
 
 _CPE_SAFE_RE = re.compile(r"[^a-zA-Z0-9_.\-]")
+# Hostname with at least one dot, no : — distinguishes from vendor:product:ver
+_FQDN_LIKE = re.compile(
+    r"^(?!-)(?:[A-Za-z0-9-]{1,63}\.)+[A-Za-z]{2,63}$"
+)
+
+
+def is_bare_fqdn_not_cpe(raw: str) -> bool:
+    """True for ``seekpious.com``-style input that is not a valid CPE shortcut."""
+    t = raw.strip()
+    if not t or t.startswith("cpe:") or t.startswith("cpe/") or ":" in t:
+        return False
+    return bool(_FQDN_LIKE.match(t))
 
 
 def build_cpe_match(raw: str) -> tuple[str, str]:
@@ -64,7 +80,10 @@ async def _get_cache(redis: aioredis.Redis, key: str) -> dict[str, Any] | None:
 
 
 async def _set_cache(redis: aioredis.Redis, key: str, value: dict[str, Any]) -> None:
-    await redis.setex(CACHE_PREFIX + key, CACHE_TTL, json.dumps(value).encode("utf-8"))
+    try:
+        await redis.setex(CACHE_PREFIX + key, CACHE_TTL, json.dumps(value).encode("utf-8"))
+    except (OSError, TypeError) as exc:
+        log.warning("cve.cache.set_failed", error=str(exc))
 
 
 async def query_cves(
@@ -82,9 +101,18 @@ async def query_cves(
         log.info("cve.cache.hit", cpe=cpe_string)
         return cached
 
-    params = {param_name: cpe_string, "resultsPerPage": str(limit)}
+    params: dict[str, str] = {param_name: cpe_string, "resultsPerPage": str(limit)}
+    if settings.nvd_api_key.strip():
+        params["apiKey"] = settings.nvd_api_key.strip()
+
+    timeout = httpx.Timeout(
+        connect=20.0,
+        read=settings.nvd_request_timeout,
+        write=20.0,
+        pool=20.0,
+    )
     async with httpx.AsyncClient(
-        timeout=settings.recon_timeout_seconds * 3,
+        timeout=timeout,
         headers={"User-Agent": "SentinelOps-Recon/1.0"},
     ) as client:
         try:
@@ -93,24 +121,37 @@ async def query_cves(
         except httpx.HTTPError as exc:
             log.warning("cve.nvd.error", cpe=cpe_string, error=str(exc))
             return {"vulnerabilities": [], "error": str(exc), "cpe": cpe_string}
+        try:
+            data: dict[str, Any] = resp.json()
+        except (json.JSONDecodeError, ValueError) as exc:
+            log.warning("cve.nvd.json", cpe=cpe_string, error=str(exc))
+            return {
+                "vulnerabilities": [],
+                "error": f"NVD did not return JSON: {exc}",
+                "cpe": cpe_string,
+            }
 
-    data: dict[str, Any] = resp.json()
+    rows: list[dict[str, Any]] = []
+    for v in data.get("vulnerabilities", []):
+        cve_block = v.get("cve") or {}
+        cve_id = cve_block.get("id")
+        if not cve_id:
+            continue
+        rows.append(
+            {
+                "cve_id": cve_id,
+                "summary": next(
+                    (d.get("value") for d in cve_block.get("descriptions", []) if d.get("lang") == "en"),
+                    "",
+                ),
+                "severity": _severity_from_metrics(cve_block.get("metrics", {})),
+            }
+        )
     summary = {
         "cpe": cpe_string,
         "match_type": param_name,
         "total_results": data.get("totalResults", 0),
-        "vulnerabilities": [
-            {
-                "cve_id": v.get("cve", {}).get("id"),
-                "summary": next(
-                    (d.get("value") for d in v.get("cve", {}).get("descriptions", [])
-                     if d.get("lang") == "en"),
-                    "",
-                ),
-                "severity": _severity_from_metrics(v.get("cve", {}).get("metrics", {})),
-            }
-            for v in data.get("vulnerabilities", [])
-        ],
+        "vulnerabilities": rows,
     }
     await _set_cache(redis, cache_key, summary)
     return summary
@@ -125,7 +166,7 @@ def _severity_from_metrics(metrics: dict[str, Any]) -> str:
             if sev:
                 return str(sev).lower()
             score = base.get("baseScore")
-            if isinstance(score, int | float):
+            if isinstance(score, (int, float)):
                 if score >= 9.0:
                     return "critical"
                 if score >= 7.0:
