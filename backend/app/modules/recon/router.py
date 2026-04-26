@@ -297,7 +297,11 @@ async def list_findings(
 ) -> Paginated[FindingOut]:
     target_ids_q = select(Target.id).where(Target.owner_id == user.id)
     job_ids_q = select(ReconJob.id).where(ReconJob.target_id.in_(target_ids_q))
-    q = select(Finding).where(Finding.job_id.in_(job_ids_q))
+    q = (
+        select(Finding)
+        .join(ReconJob, Finding.job_id == ReconJob.id)
+        .where(Finding.job_id.in_(job_ids_q))
+    )
     c = select(func.count(Finding.id)).where(Finding.job_id.in_(job_ids_q))
     if severity:
         q = q.where(Finding.severity == severity)
@@ -307,6 +311,8 @@ async def list_findings(
         c = c.where(Finding.job_id == job_id)
 
     total = (await db.execute(c)).scalar_one()
+    # Deterministic, newest jobs first (fixes empty "Latest job" when only 50 random rows were returned).
+    q = q.order_by(ReconJob.finished_at.desc().nulls_last(), ReconJob.started_at.desc().nulls_last(), Finding.id)
     q = q.offset((page - 1) * size).limit(size)
     rows = (await db.execute(q)).scalars().all()
 

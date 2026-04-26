@@ -144,10 +144,16 @@ export default function ReconPage() {
 
   const loadLists = useCallback(async () => {
     try {
-      const [tgs, jRes, fRes] = await Promise.all([
+      const jobFindingsUrl = watchJobId
+        ? `/api/v1/recon/findings?job_id=${encodeURIComponent(watchJobId)}&size=500`
+        : null;
+      const [tgs, jRes, fRes, fJobRes] = await Promise.all([
         api.get<ReconTarget[]>("/api/v1/recon/targets"),
         api.get<Paginated<ReconJob>>("/api/v1/recon/jobs?size=50"),
-        api.get<Paginated<ReconFinding>>("/api/v1/recon/findings?size=50")
+        api.get<Paginated<ReconFinding>>("/api/v1/recon/findings?size=200"),
+        jobFindingsUrl
+          ? api.get<Paginated<ReconFinding>>(jobFindingsUrl)
+          : Promise.resolve({ items: [], page: 1, size: 0, total: 0 })
       ]);
       const map: Record<string, string> = {};
       tgs.forEach((t) => {
@@ -155,7 +161,10 @@ export default function ReconPage() {
       });
       setTargetById(map);
       setJobs(jRes.items);
-      setFindings(fRes.items);
+      const merged = new Map<string, ReconFinding>();
+      fRes.items.forEach((f) => merged.set(f.id, f));
+      fJobRes.items.forEach((f) => merged.set(f.id, f));
+      setFindings([...merged.values()]);
       setError(null);
     } catch (e) {
       const a = e as ApiError;
@@ -165,7 +174,7 @@ export default function ReconPage() {
         setError(a.detail || "Failed to load recon data. Is the API up?");
       }
     }
-  }, []);
+  }, [watchJobId]);
 
   useEffect(() => {
     const t = runDeferred(() => void loadLists());
