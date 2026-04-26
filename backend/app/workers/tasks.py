@@ -13,6 +13,10 @@ from app.modules.recon.workers import (  # noqa: F401
     run_portscan_job,
     run_cve_job,
     run_webfuzz_job,
+    run_dns_job,
+    run_httprobe_job,
+    run_http_headers_job,
+    run_tls_cert_job,
 )
 
 

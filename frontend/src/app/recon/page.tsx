@@ -14,7 +14,15 @@ import {
 } from "@/lib/api";
 import { runDeferred } from "@/lib/schedule-deferred";
 
-type JobKind = "subdomain" | "port" | "cve" | "webfuzz";
+type JobKind =
+  | "subdomain"
+  | "port"
+  | "cve"
+  | "webfuzz"
+  | "dns"
+  | "httprobe"
+  | "http_headers"
+  | "tls_cert";
 type TargetKind = "domain" | "host" | "cidr";
 
 /** Port scan dropdown: `full` omits the list so the API uses the server default (broad). */
@@ -91,6 +99,28 @@ function summariseResult(job: ReconJob): string {
     const hits = Array.isArray(r.hits) ? r.hits.length : 0;
     return `${hits} interesting path${hits === 1 ? "" : "s"}`;
   }
+  if (job.kind === "dns") {
+    const rec = (r.records as Record<string, string[]> | undefined) || {};
+    const n = Object.values(rec).reduce((a, b) => a + (Array.isArray(b) ? b.length : 0), 0);
+    return `${n} DNS record${n === 1 ? "" : "s"}`;
+  }
+  if (job.kind === "httprobe") {
+    const pr = r.probes as unknown[] | undefined;
+    return `${Array.isArray(pr) ? pr.length : 0} HTTP probe(s)`;
+  }
+  if (job.kind === "http_headers") {
+    const m = (r.headers_missing as string[] | undefined)?.length;
+    if (typeof m === "number") return m ? `${m} security header(s) missing` : "Headers look strong";
+    return "Security header check";
+  }
+  if (job.kind === "tls_cert" && (r as { ok?: boolean }).ok) {
+    const d = (r as { days_left?: number }).days_left;
+    if (typeof d === "number") return `Cert · ~${d} day(s) to expiry`;
+    return "TLS certificate details";
+  }
+  if (job.kind === "tls_cert") {
+    return (r as { error?: string }).error || "TLS check";
+  }
   return "completed";
 }
 
@@ -100,6 +130,7 @@ export default function ReconPage() {
   const [cpe, setCpe] = useState("");
   const [portPreset, setPortPreset] = useState<PortScanPreset>("full");
   const [ports, setPorts] = useState("80,443,8080,8443,8081,9443");
+  const [tlsPort, setTlsPort] = useState("443");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -181,6 +212,13 @@ export default function ReconPage() {
     if (kind === "cve") {
       return { cpe: cpe.trim() || v };
     }
+    if (kind === "tls_cert") {
+      const p = Number.parseInt(tlsPort, 10);
+      if (Number.isInteger(p) && p > 0 && p <= 65535) {
+        return { port: p };
+      }
+      return { port: 443 };
+    }
     return {};
   };
 
@@ -189,8 +227,23 @@ export default function ReconPage() {
     if (kind === "subdomain" && targetKind !== "domain") {
       return "Subdomain enumeration needs a domain such as example.com, not an IP/CIDR.";
     }
+    if (kind === "dns" && targetKind === "cidr") {
+      return "DNS record lookup does not run on a CIDR. Use a host, domain, or specific IP as a name.";
+    }
     if (kind === "port" && targetKind === "cidr") {
       return "Port scan currently accepts one host/IP at a time. Enter a host or IP, not CIDR.";
+    }
+    if (kind === "httprobe" && targetKind === "cidr") {
+      return "HTTP live probe does not work on a CIDR. Use a host, IP, or full URL.";
+    }
+    if (kind === "http_headers" && targetKind === "cidr") {
+      return "Security header check needs a host, IP, or URL — not a CIDR.";
+    }
+    if (kind === "webfuzz" && targetKind === "cidr") {
+      return "Web fuzz needs a host or domain with an HTTP service, not a CIDR range.";
+    }
+    if (kind === "tls_cert" && targetKind === "cidr") {
+      return "TLS certificate grab needs a single host, IP, or https:// URL — not a CIDR.";
     }
     if (kind === "cve") {
       const candidate = (cpe.trim() || v).trim();
@@ -247,7 +300,7 @@ export default function ReconPage() {
       <SectionHeader
         eyebrow="Red team"
         title="Recon"
-        description="Run subdomain enumeration (DNS brute-force + crt.sh Certificate Transparency), TCP port scan with banner grab, NVD CVE lookup (full CPE or product:version shortcut), and common-path web fuzzing against real hosts. Only scan assets you own or are authorised to assess; configure RECON_TARGET_ALLOWLIST in production."
+        description="Recon includes subdomain enum, DNS records, TCP port scan (incl. DB + web profiles), HTTP(S) liveness, security response headers, TLS cert inspection, NVD CVE, and path fuzzing. Only scan assets you are authorised to test; set RECON_TARGET_ALLOWLIST in production."
       />
 
       {error && (
@@ -281,10 +334,20 @@ export default function ReconPage() {
               disabled={busy}
               className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-2 text-sm outline-none focus:border-accent/60"
             >
-              <option value="subdomain">Subdomain enum</option>
-              <option value="port">Port scan</option>
-              <option value="cve">CVE lookup</option>
-              <option value="webfuzz">Web fuzz</option>
+              <optgroup label="Discovery">
+                <option value="subdomain">Subdomain enum</option>
+                <option value="dns">DNS (A, MX, NS, TXT…)</option>
+                <option value="port">Port scan</option>
+                <option value="httprobe">HTTP(S) live probe</option>
+              </optgroup>
+              <optgroup label="Vulnerabilities">
+                <option value="cve">CVE lookup (NVD)</option>
+              </optgroup>
+              <optgroup label="Web &amp; transport">
+                <option value="webfuzz">Web path fuzz</option>
+                <option value="http_headers">Security headers</option>
+                <option value="tls_cert">TLS certificate</option>
+              </optgroup>
             </select>
           </div>
           {selectedKind === "port" && (
@@ -330,6 +393,18 @@ export default function ReconPage() {
               />
             </div>
           )}
+          {selectedKind === "tls_cert" && (
+            <div className="min-w-[100px]">
+              <label className="text-[11px] text-muted uppercase tracking-wider">TLS port</label>
+              <input
+                value={tlsPort}
+                onChange={(e) => setTlsPort(e.target.value.replace(/\D/g, "").slice(0, 5))}
+                disabled={busy}
+                className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-2 text-sm font-mono outline-none focus:border-accent/60"
+                placeholder="443"
+              />
+            </div>
+          )}
           <button
             type="button"
             disabled={busy}
@@ -345,10 +420,9 @@ export default function ReconPage() {
           </button>
         </div>
         <p className="text-[11px] text-muted mt-3">
-          Subdomain → a domain (example.com). Port scan → single host or IP; use{" "}
-          <span className="text-fg/90">Full</span> for the broad server list (includes common DB
-          services), or narrow with Web / Databases / Remote. CVE → full CPE 2.3 or shortcut like{" "}
-          <span className="font-mono">nginx:1.25.3</span>. Web fuzz → http(s) URL or host.
+          DNS &amp; Subdomain use a resolvable name. Port scan: single host/IP, profiles for full DB
+          coverage. HTTP probe / security headers: URL or host. TLS cert: host, optional custom port. CVE:{" "}
+          <span className="font-mono">nginx:1.25.3</span> or full CPE. Web fuzz: http(s) URL or host.
         </p>
       </div>
 

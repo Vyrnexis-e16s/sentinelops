@@ -84,6 +84,10 @@ check2xx() {
   fi
 }
 
+section "0a. Platform — unauthenticated dependency surface"
+PLAT_OUT="$(req GET /platform/status)"
+check2xx "GET /platform/status" "$PLAT_OUT"
+
 section "0. Auth — register a fresh smoke user, then password login"
 note "Using a unique email each run so we always land on the happy path."
 note "  EMAIL=$EMAIL"
@@ -131,10 +135,11 @@ if [[ -z "$TGT_ID" ]]; then
 else
   ok "test target created ($TGT_ID)"
 
-  for KIND in subdomain port cve webfuzz; do
+  for KIND in subdomain port cve webfuzz dns httprobe http_headers tls_cert; do
     case "$KIND" in
       port)    PARAMS='{"ports":[80,443]}' ;;
       cve)     PARAMS='{"cpe":"nginx:1.25.3"}' ;;
+      tls_cert) PARAMS='{"port":443}' ;;
       *)       PARAMS='{}' ;;
     esac
     JOB_BODY="$(printf '{"target_id":"%s","kind":"%s","params":%s}' "$TGT_ID" "$KIND" "$PARAMS")"
@@ -146,7 +151,7 @@ else
     fi
     note "$KIND job $JOB_ID enqueued — polling for up to 60s…"
     LAST_STATUS=""
-    for _ in $(seq 1 30); do
+    for _ in $(seq 1 45); do
       sleep 2
       JOB_OUT="$(req GET "/recon/jobs/$JOB_ID")"
       LAST_STATUS="$(echo "$JOB_OUT" | jget status)"

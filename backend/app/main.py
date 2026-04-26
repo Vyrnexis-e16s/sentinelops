@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.api.auth import router as auth_router
+from app.api.platform_health import router as platform_health_router
 from app.core.config import settings
 from app.core.db import dispose_engine, init_db
 from app.core.errors import register_exception_handlers
@@ -73,6 +74,7 @@ def create_app() -> FastAPI:
 
     # ------- routers --------
     app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(platform_health_router, prefix="/api/v1")
     app.include_router(siem_router, prefix="/api/v1")
     app.include_router(intel_routes.router, prefix="/api/v1")
     app.include_router(recon_router, prefix="/api/v1")

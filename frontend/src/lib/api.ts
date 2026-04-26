@@ -180,3 +180,11 @@ export async function vaultDownloadBlob(objectId: string): Promise<Blob> {
   }
   return res.blob();
 }
+
+/** GET /api/v1/platform/status — unauthenticated ops probe. */
+export type PlatformStatus = {
+  database: string;
+  redis: string;
+  ids_model: string;
+  modules: string[];
+};

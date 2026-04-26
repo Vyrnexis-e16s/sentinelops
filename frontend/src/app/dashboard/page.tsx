@@ -8,7 +8,15 @@ import { Activity, Crosshair, Lock, Radar, Shield } from "lucide-react";
 import StatCard from "@/components/shared/StatCard";
 import SectionHeader from "@/components/shared/SectionHeader";
 import { LiveAlertsPanel } from "@/components/dashboard/LiveAlertsPanel";
-import { api, type ApiError, type Inference, type Paginated, type ReconJob, type VaultObject } from "@/lib/api";
+import {
+  api,
+  type ApiError,
+  type Inference,
+  type Paginated,
+  type PlatformStatus,
+  type ReconJob,
+  type VaultObject
+} from "@/lib/api";
 import { runDeferred } from "@/lib/schedule-deferred";
 
 const Globe = dynamic(() => import("@/components/three/Globe"), { ssr: false });
@@ -20,6 +28,7 @@ type DashStats = {
   idsError: "none" | "unavailable" | "auth";
   vaultCount: number | null;
   auth: boolean;
+  platform: PlatformStatus | null;
 };
 
 export default function DashboardPage() {
@@ -29,16 +38,18 @@ export default function DashboardPage() {
     idsAttackPct: null,
     idsError: "none",
     vaultCount: null,
-    auth: false
+    auth: false,
+    platform: null
   });
 
   const loadStats = useCallback(async () => {
     try {
-      const [nNew, nAck, jobsP, vaultFiles] = await Promise.all([
+      const [nNew, nAck, jobsP, vaultFiles, platform] = await Promise.all([
         api.get<Paginated<{ id: string }>>("/api/v1/siem/alerts?status=new&size=1&page=1"),
         api.get<Paginated<{ id: string }>>("/api/v1/siem/alerts?status=ack&size=1&page=1"),
         api.get<Paginated<ReconJob>>("/api/v1/recon/jobs?size=200&page=1"),
-        api.get<VaultObject[]>("/api/v1/vault/files")
+        api.get<VaultObject[]>("/api/v1/vault/files"),
+        api.get<PlatformStatus>("/api/v1/platform/status").catch(() => null)
       ]);
       const open = nNew.total + nAck.total;
       const reconActive = jobsP.items.filter(
@@ -63,7 +74,8 @@ export default function DashboardPage() {
         idsAttackPct,
         idsError,
         vaultCount: vaultFiles.length,
-        auth: true
+        auth: true,
+        platform
       });
     } catch (e) {
       const a = e as ApiError;
@@ -74,7 +86,8 @@ export default function DashboardPage() {
           idsAttackPct: null,
           idsError: "auth",
           vaultCount: null,
-          auth: false
+          auth: false,
+          platform: null
         });
       }
     }
@@ -114,6 +127,13 @@ export default function DashboardPage() {
         title="Single-pane overview"
         description="Stat cards pull from SIEM alerts, recon jobs, IDS inferences, and vault file list when you are signed in. Recent alerts use the API and WebSocket when a JWT is in localStorage."
       />
+      {stats.auth && stats.platform && (
+        <p className="text-[11px] text-muted">
+          <span className="text-fg/80">Platform:</span> DB {stats.platform.database} · Redis{" "}
+          {stats.platform.redis} · IDS model {stats.platform.ids_model} · API modules{" "}
+          {stats.platform.modules?.length ?? 0} loaded
+        </p>
+      )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <StatCard

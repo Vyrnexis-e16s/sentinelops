@@ -8,7 +8,16 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 TargetKind = Literal["domain", "host", "cidr"]
-JobKind = Literal["subdomain", "port", "cve", "webfuzz"]
+JobKind = Literal[
+    "subdomain",
+    "port",
+    "cve",
+    "webfuzz",
+    "dns",
+    "httprobe",
+    "http_headers",
+    "tls_cert",
+]
 JobStatus = Literal["queued", "running", "done", "failed"]
 
 

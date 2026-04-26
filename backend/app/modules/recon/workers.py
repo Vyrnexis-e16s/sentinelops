@@ -19,7 +19,11 @@ from app.core.logging import get_logger
 from app.core.redis import init_redis
 from app.modules.recon.models import Finding, ReconJob
 from app.modules.recon.services.cve import query_cves
+from app.modules.recon.services.dns_recon import collect_records as collect_dns
+from app.modules.recon.services.httprobe import probe as httprobe_urls
+from app.modules.recon.services.http_headers import check_security_headers
 from app.modules.recon.services.portscan import scan_host
+from app.modules.recon.services.tls_info import fetch_peer_info
 from app.modules.recon.services.subdomain import enumerate_subdomains
 from app.modules.recon.services.webfuzz import fuzz_paths
 from app.services.events import CHANNEL_RECON, publish
@@ -244,6 +248,209 @@ async def _run_webfuzz(job_id: str, target: str, params: dict[str, Any]) -> dict
     return {"hits": len(findings)}
 
 
+def _host_and_port(target: str) -> tuple[str, int | None]:
+    from urllib.parse import urlparse
+
+    t = (target or "").strip()
+    if not t:
+        return ("", None)
+    if "://" in t:
+        p = urlparse(t)
+        return (p.hostname or "", p.port)
+    if t.count(":") == 1 and not t.startswith("["):
+        a, b = t.rsplit(":", 1)
+        if b.isdigit():
+            return a, int(b)
+    return t.split("/")[0], None
+
+
+async def _run_dns(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    await dispose_engine()
+    factory = get_session_factory()
+    async with factory() as db:
+        job = await _claim_for_run(db, uuid.UUID(job_id))
+        if job is None:
+            return {"error": "missing_or_already_handled"}
+        try:
+            col = await collect_dns(target)
+        except Exception as exc:  # noqa: BLE001
+            await _set_status(db, uuid.UUID(job_id), "failed")
+            await db.commit()
+            log.exception("recon.dns.failed", job_id=job_id, error=str(exc))
+            return {"error": str(exc)}
+
+        total = sum(len(v) for v in col.get("records", {}).values() if isinstance(v, list))
+        findings: list[dict[str, Any]] = [
+            {
+                "severity": "info",
+                "title": f"DNS: {col.get('name', target)}",
+                "description": f"{total} record(s) across A/AAAA/MX/NS/TXT/CNAME",
+                "evidence": col,
+            }
+        ]
+        await _persist_findings(db, uuid.UUID(job_id), findings)
+        job.result_json = col
+        await _set_status(db, uuid.UUID(job_id), "done")
+        await db.commit()
+    await publish(CHANNEL_RECON, {"job_id": job_id, "kind": "dns", "count": len(findings)})
+    return {"records": total}
+
+
+async def _run_httprobe(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:  # noqa: ARG001
+    await dispose_engine()
+    factory = get_session_factory()
+    async with factory() as db:
+        job = await _claim_for_run(db, uuid.UUID(job_id))
+        if job is None:
+            return {"error": "missing_or_already_handled"}
+        try:
+            rows = await httprobe_urls(target)
+        except Exception as exc:  # noqa: BLE001
+            await _set_status(db, uuid.UUID(job_id), "failed")
+            await db.commit()
+            log.exception("recon.httprobe.failed", job_id=job_id, error=str(exc))
+            return {"error": str(exc)}
+
+        finding_rows: list[dict[str, Any]] = []
+        for r in rows:
+            if r.get("error") is not None:
+                finding_rows.append(
+                    {
+                        "severity": "low",
+                        "title": f"HTTP probe: {r.get('url', '')}",
+                        "description": r.get("error", ""),
+                        "evidence": r,
+                    }
+                )
+            else:
+                st = r.get("status", 0)
+                finding_rows.append(
+                    {
+                        "severity": "low",
+                        "title": f"HTTP {st} — {r.get('url', '')}",
+                        "description": (r.get("title") or r.get("server") or "")
+                        and f"{(r.get('title') or '').strip()[:120]} {r.get('server') or ''}".strip(),
+                        "evidence": r,
+                    }
+                )
+        if not finding_rows:
+            finding_rows = [
+                {
+                    "severity": "info",
+                    "title": "No HTTP response",
+                    "description": "Nothing to show",
+                    "evidence": {},
+                }
+            ]
+        await _persist_findings(db, uuid.UUID(job_id), finding_rows)
+        job.result_json = {"probes": rows}
+        await _set_status(db, uuid.UUID(job_id), "done")
+        await db.commit()
+    await publish(CHANNEL_RECON, {"job_id": job_id, "kind": "httprobe", "count": len(finding_rows)})
+    return {"probes": len(rows)}
+
+
+async def _run_http_headers(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:  # noqa: ARG001
+    await dispose_engine()
+    factory = get_session_factory()
+    async with factory() as db:
+        job = await _claim_for_run(db, uuid.UUID(job_id))
+        if job is None:
+            return {"error": "missing_or_already_handled"}
+        try:
+            res = await check_security_headers(target)
+        except Exception as exc:  # noqa: BLE001
+            await _set_status(db, uuid.UUID(job_id), "failed")
+            await db.commit()
+            log.exception("recon.http_headers.failed", job_id=job_id, error=str(exc))
+            return {"error": str(exc)}
+
+        if not res.get("ok"):
+            findings = [
+                {
+                    "severity": "medium",
+                    "title": "Security headers probe failed",
+                    "description": str(res.get("error", "unknown")),
+                    "evidence": res,
+                }
+            ]
+        else:
+            miss = res.get("headers_missing") or []
+            sev = "high" if len(miss) >= 5 else "medium" if len(miss) else "low"
+            findings = [
+                {
+                    "severity": sev,
+                    "title": f"Security headers on {res.get('url', '')} — {len(miss)} missing",
+                    "description": ", ".join(miss) or "all checked headers present",
+                    "evidence": res,
+                }
+            ]
+        await _persist_findings(db, uuid.UUID(job_id), findings)
+        job.result_json = res
+        await _set_status(db, uuid.UUID(job_id), "done")
+        await db.commit()
+    await publish(CHANNEL_RECON, {"job_id": job_id, "kind": "http_headers", "count": len(findings)})
+    return {"ok": res.get("ok", False)}
+
+
+async def _run_tls_cert(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    await dispose_engine()
+    factory = get_session_factory()
+    h, tport = _host_and_port(target)
+    raw = params.get("port", tport)
+    if raw is None:
+        raw = 443
+    try:
+        p = int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        p = 443
+    if p < 1 or p > 65535:
+        p = 443
+    async with factory() as db:
+        job = await _claim_for_run(db, uuid.UUID(job_id))
+        if job is None:
+            return {"error": "missing_or_already_handled"}
+        if not h:
+            await _set_status(db, uuid.UUID(job_id), "failed")
+            await db.commit()
+            return {"error": "Could not parse hostname for TLS (use a host, host:port, or https:// URL)."}
+        try:
+            info = await fetch_peer_info(h, p)
+        except Exception as exc:  # noqa: BLE001
+            await _set_status(db, uuid.UUID(job_id), "failed")
+            await db.commit()
+            log.exception("recon.tls_cert.failed", job_id=job_id, error=str(exc))
+            return {"error": str(exc)}
+
+        if not info.get("ok"):
+            findings = [
+                {
+                    "severity": "high",
+                    "title": f"TLS on {h}:{p}",
+                    "description": str(info.get("error", "error")),
+                    "evidence": info,
+                }
+            ]
+        else:
+            dl = info.get("days_left")
+            sev = "high" if isinstance(dl, int) and dl < 7 else "medium" if isinstance(dl, int) and dl < 30 else "low"
+            cn = (info.get("subject") or {}).get("commonName", "")
+            findings = [
+                {
+                    "severity": sev,
+                    "title": f"TLS cert for {h}:{p} — CN {cn or '—'}",
+                    "description": f"Expires in ~{dl} day(s) after {info.get('not_after', '—')}",
+                    "evidence": info,
+                }
+            ]
+        await _persist_findings(db, uuid.UUID(job_id), findings)
+        job.result_json = info
+        await _set_status(db, uuid.UUID(job_id), "done")
+        await db.commit()
+    await publish(CHANNEL_RECON, {"job_id": job_id, "kind": "tls_cert", "count": len(findings)})
+    return {"ok": bool(info.get("ok"))}
+
+
 # --------------------------------------------------------------------------- #
 # Celery task wrappers                                                        #
 # --------------------------------------------------------------------------- #
@@ -267,6 +474,26 @@ def run_cve_job(job_id: str, target: str, params: dict[str, Any]) -> dict[str, A
 @celery_app.task(name="recon.webfuzz")
 def run_webfuzz_job(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
     return asyncio.run(_run_webfuzz(job_id, target, params or {}))
+
+
+@celery_app.task(name="recon.dns")
+def run_dns_job(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    return asyncio.run(_run_dns(job_id, target, params or {}))
+
+
+@celery_app.task(name="recon.httprobe")
+def run_httprobe_job(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    return asyncio.run(_run_httprobe(job_id, target, params or {}))
+
+
+@celery_app.task(name="recon.http_headers")
+def run_http_headers_job(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    return asyncio.run(_run_http_headers(job_id, target, params or {}))
+
+
+@celery_app.task(name="recon.tls_cert")
+def run_tls_cert_job(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    return asyncio.run(_run_tls_cert(job_id, target, params or {}))
 
 
 @celery_app.task(name="recon.rescue")

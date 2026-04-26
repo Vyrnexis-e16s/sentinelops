@@ -132,6 +132,10 @@ async def create_job(
             "port": workers.run_portscan_job,
             "cve": workers.run_cve_job,
             "webfuzz": workers.run_webfuzz_job,
+            "dns": workers.run_dns_job,
+            "httprobe": workers.run_httprobe_job,
+            "http_headers": workers.run_http_headers_job,
+            "tls_cert": workers.run_tls_cert_job,
         }
         task = task_map.get(payload.kind)
         if task is not None:
@@ -241,6 +245,10 @@ async def retry_job(
             "port": workers.run_portscan_job,
             "cve": workers.run_cve_job,
             "webfuzz": workers.run_webfuzz_job,
+            "dns": workers.run_dns_job,
+            "httprobe": workers.run_httprobe_job,
+            "http_headers": workers.run_http_headers_job,
+            "tls_cert": workers.run_tls_cert_job,
         }
         task = task_map.get(job.kind)
         if task is None:
