@@ -17,14 +17,16 @@ _SECURITY_HEADERS: tuple[tuple[str, str, str], ...] = (
 )
 
 
-async def check_security_headers(target: str) -> dict[str, Any]:
+async def check_security_headers(target: str, *, https_only: bool = False) -> dict[str, Any]:
     t = (target or "").strip()
     if not t:
         return {"ok": False, "error": "empty target", "url": None, "headers": {}}
-    if not (t.lower().startswith("http://") or t.lower().startswith("https://")):
-        try_urls = (f"https://{t}/", f"http://{t}/")
+    if t.lower().startswith("http://") or t.lower().startswith("https://"):
+        try_urls: tuple[str, ...] = (t,)
+    elif https_only:
+        try_urls = (f"https://{t}/",)
     else:
-        try_urls = (t,)
+        try_urls = (f"https://{t}/", f"http://{t}/")
 
     async with httpx.AsyncClient(
         follow_redirects=True,
@@ -48,6 +50,8 @@ async def check_security_headers(target: str) -> dict[str, Any]:
                 return {
                     "ok": True,
                     "url": u,
+                    "https": u.lower().startswith("https://"),
+                    "https_only_mode": https_only,
                     "status": r.status_code,
                     "headers_found": found,
                     "headers_missing": missing,

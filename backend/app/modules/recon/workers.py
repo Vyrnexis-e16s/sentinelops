@@ -296,7 +296,7 @@ async def _run_dns(job_id: str, target: str, params: dict[str, Any]) -> dict[str
     return {"records": total}
 
 
-async def _run_httprobe(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:  # noqa: ARG001
+async def _run_httprobe(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
     await dispose_engine()
     factory = get_session_factory()
     async with factory() as db:
@@ -304,7 +304,8 @@ async def _run_httprobe(job_id: str, target: str, params: dict[str, Any]) -> dic
         if job is None:
             return {"error": "missing_or_already_handled"}
         try:
-            rows = await httprobe_urls(target)
+            https_only = bool(params.get("https_only", False))
+            rows = await httprobe_urls(target, https_only=https_only)
         except Exception as exc:  # noqa: BLE001
             await _set_status(db, uuid.UUID(job_id), "failed")
             await db.commit()
@@ -350,7 +351,7 @@ async def _run_httprobe(job_id: str, target: str, params: dict[str, Any]) -> dic
     return {"probes": len(rows)}
 
 
-async def _run_http_headers(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:  # noqa: ARG001
+async def _run_http_headers(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
     await dispose_engine()
     factory = get_session_factory()
     async with factory() as db:
@@ -358,7 +359,8 @@ async def _run_http_headers(job_id: str, target: str, params: dict[str, Any]) ->
         if job is None:
             return {"error": "missing_or_already_handled"}
         try:
-            res = await check_security_headers(target)
+            https_only = bool(params.get("https_only", False))
+            res = await check_security_headers(target, https_only=https_only)
         except Exception as exc:  # noqa: BLE001
             await _set_status(db, uuid.UUID(job_id), "failed")
             await db.commit()

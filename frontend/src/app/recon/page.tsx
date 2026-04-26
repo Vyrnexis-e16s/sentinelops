@@ -131,6 +131,8 @@ export default function ReconPage() {
   const [portPreset, setPortPreset] = useState<PortScanPreset>("full");
   const [ports, setPorts] = useState("80,443,8080,8443,8081,9443");
   const [tlsPort, setTlsPort] = useState("443");
+  /** If true, httprobe and security-headers jobs only use https:// (no cleartext fallback). */
+  const [httpsOnly, setHttpsOnly] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -218,6 +220,9 @@ export default function ReconPage() {
         return { port: p };
       }
       return { port: 443 };
+    }
+    if (kind === "httprobe" || kind === "http_headers") {
+      return httpsOnly ? { https_only: true } : {};
     }
     return {};
   };
@@ -405,6 +410,18 @@ export default function ReconPage() {
               />
             </div>
           )}
+          {(selectedKind === "httprobe" || selectedKind === "http_headers") && (
+            <label className="flex items-center gap-2 self-end text-[11px] text-muted min-w-[200px] pb-0.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={httpsOnly}
+                onChange={(e) => setHttpsOnly(e.target.checked)}
+                disabled={busy}
+                className="rounded border-border accent-accent"
+              />
+              <span>HTTPS only (no cleartext fallback)</span>
+            </label>
+          )}
           <button
             type="button"
             disabled={busy}
@@ -421,7 +438,9 @@ export default function ReconPage() {
         </div>
         <p className="text-[11px] text-muted mt-3">
           DNS &amp; Subdomain use a resolvable name. Port scan: single host/IP, profiles for full DB
-          coverage. HTTP probe / security headers: URL or host. TLS cert: host, optional custom port. CVE:{" "}
+          coverage. HTTP probe and security headers are real HTTPS fetches (TLS verified); check{" "}
+          <span className="text-fg/80">HTTPS only</span> to skip any http:// retry.{" "}
+          <span className="text-fg/80">TLS cert</span> is a direct TLS handshake. CVE:{" "}
           <span className="font-mono">nginx:1.25.3</span> or full CPE. Web fuzz: http(s) URL or host.
         </p>
       </div>

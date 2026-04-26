@@ -13,15 +13,18 @@ log = get_logger(__name__)
 _TITLE = re.compile(r"<title[^>]*>([^<]+)</title>", re.I)
 
 
-async def probe(target: str) -> list[dict[str, Any]]:
+async def probe(target: str, *, https_only: bool = False) -> list[dict[str, Any]]:
     t = (target or "").strip()
     if not t:
         return []
     if t.lower().startswith("http://") or t.lower().startswith("https://"):
         urls = [t]
     else:
-        # Host[:port] or host/path — use as netloc
-        urls = [f"https://{t}/", f"http://{t}/"]
+        # Host[:port] or host/path — default: try HTTPS first (real TLS), then HTTP.
+        if https_only:
+            urls = [f"https://{t}/"]
+        else:
+            urls = [f"https://{t}/", f"http://{t}/"]
 
     out: list[dict[str, Any]] = []
     async with httpx.AsyncClient(
@@ -39,9 +42,13 @@ async def probe(target: str) -> list[dict[str, Any]]:
                     m = _TITLE.search(r.text[:32_000])
                     if m:
                         title = m.group(1).strip()[:500]
+                is_https = str(r.url).lower().startswith("https://")
+                hv = getattr(r, "http_version", None)
                 out.append(
                     {
                         "url": str(r.url),
+                        "https": is_https,
+                        "http_version": str(hv) if hv is not None else "HTTP/1.1",
                         "status": r.status_code,
                         "server": r.headers.get("server"),
                         "content_type": r.headers.get("content-type"),
