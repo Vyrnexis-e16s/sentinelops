@@ -22,7 +22,11 @@ type JobKind =
   | "dns"
   | "httprobe"
   | "http_headers"
-  | "tls_cert";
+  | "tls_cert"
+  | "ct"
+  | "wellknown"
+  | "fingerprint"
+  | "ptr";
 type TargetKind = "domain" | "host" | "cidr";
 
 /** Port scan dropdown: `full` omits the list so the API uses the server default (broad). */
@@ -121,6 +125,31 @@ function summariseResult(job: ReconJob): string {
   if (job.kind === "tls_cert") {
     return (r as { error?: string }).error || "TLS check";
   }
+  if (job.kind === "ct") {
+    const n = (r as { unique_names?: number; returned?: number }).unique_names;
+    const ret = (r as { returned?: number }).returned;
+    if (typeof n === "number") return `${n} unique name(s) in CT (${ret ?? "?"} from crt.sh)`;
+    if (typeof ret === "number") return `crt.sh returned ${ret} row(s)`;
+    return "Certificate transparency search";
+  }
+  if (job.kind === "wellknown") {
+    const n = (r as { probed?: number }).probed;
+    if (typeof n === "number") return `${n} well-known path(s) probed`;
+    return "Well-known file probe";
+  }
+  if (job.kind === "fingerprint") {
+    const sigs = (r as { signals?: string[] }).signals;
+    if (Array.isArray(sigs) && sigs.length) return `Signals: ${sigs.join(", ")}`;
+    return (r as { ok?: boolean }).ok
+      ? "HTTP stack hints recorded"
+      : (r as { error?: string }).error || "Fingerprint";
+  }
+  if (job.kind === "ptr") {
+    if ((r as { ok?: boolean }).ok && (r as { ptr?: string }).ptr) {
+      return `PTR: ${(r as { ptr: string }).ptr}`;
+    }
+    return (r as { error?: string }).error || "Reverse DNS";
+  }
   return "completed";
 }
 
@@ -133,6 +162,13 @@ export default function ReconPage() {
   const [tlsPort, setTlsPort] = useState("443");
   /** If true, httprobe and security-headers jobs only use https:// (no cleartext fallback). */
   const [httpsOnly, setHttpsOnly] = useState(false);
+  /** Port scan — optional worker tuning (empty = server default). */
+  const [portConcurrency, setPortConcurrency] = useState("");
+  const [portTimeoutSec, setPortTimeoutSec] = useState("");
+  /** HTTP stack fingerprint path (GET). */
+  const [fpPath, setFpPath] = useState("/");
+  /** CT (crt.sh) max unique names to persist. */
+  const [ctMaxNames, setCtMaxNames] = useState("150");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -202,23 +238,33 @@ export default function ReconPage() {
 
   const buildParams = (kind: JobKind, v: string): Record<string, unknown> => {
     if (kind === "port") {
+      let base: Record<string, unknown> = {};
       if (portPreset === "full") {
-        return {};
+        base = {};
+      } else if (portPreset === "web") {
+        base = { ports: [...new Set(PORT_PRESET_WEB)] };
+      } else if (portPreset === "databases") {
+        base = { ports: [...new Set(PORT_PRESET_DATABASES)] };
+      } else if (portPreset === "remote") {
+        base = { ports: [...new Set(PORT_PRESET_REMOTE)] };
+      } else {
+        const parsed = ports
+          .split(/[,\s]+/)
+          .map((p) => Number.parseInt(p, 10))
+          .filter((p) => Number.isInteger(p) && p > 0 && p <= 65535);
+        base = parsed.length ? { ports: [...new Set(parsed)] } : {};
       }
-      if (portPreset === "web") {
-        return { ports: [...new Set(PORT_PRESET_WEB)] };
+      const c = portConcurrency.trim();
+      if (c && /^\d+$/.test(c)) {
+        const n = Number.parseInt(c, 10);
+        if (n >= 1 && n <= 200) base = { ...base, concurrency: n };
       }
-      if (portPreset === "databases") {
-        return { ports: [...new Set(PORT_PRESET_DATABASES)] };
+      const t = portTimeoutSec.trim();
+      if (t && /^\d*\.?\d+$/.test(t)) {
+        const x = Number.parseFloat(t);
+        if (x >= 0.25 && x <= 120) base = { ...base, per_port_timeout: x };
       }
-      if (portPreset === "remote") {
-        return { ports: [...new Set(PORT_PRESET_REMOTE)] };
-      }
-      const parsed = ports
-        .split(/[,\s]+/)
-        .map((p) => Number.parseInt(p, 10))
-        .filter((p) => Number.isInteger(p) && p > 0 && p <= 65535);
-      return parsed.length ? { ports: [...new Set(parsed)] } : {};
+      return base;
     }
     if (kind === "cve") {
       return { cpe: cpe.trim() || v };
@@ -232,6 +278,17 @@ export default function ReconPage() {
     }
     if (kind === "httprobe" || kind === "http_headers") {
       return httpsOnly ? { https_only: true } : {};
+    }
+    if (kind === "fingerprint") {
+      const p = fpPath.trim() || "/";
+      return { path: p.startsWith("/") ? p : `/${p}` };
+    }
+    if (kind === "ct") {
+      const m = Number.parseInt(ctMaxNames, 10);
+      return { max_names: Number.isInteger(m) && m > 0 ? Math.min(500, m) : 150 };
+    }
+    if (kind === "wellknown" || kind === "ptr") {
+      return {};
     }
     return {};
   };
@@ -264,6 +321,26 @@ export default function ReconPage() {
       if (!candidate) {
         return "CVE lookup needs either a product:version shortcut (e.g. nginx:1.25.3) or a full CPE 2.3 name.";
       }
+    }
+    if (kind === "ptr") {
+      if (targetKind === "cidr") {
+        return "Reverse DNS (PTR) needs a single IP address, not a CIDR.";
+      }
+      const t = v.trim();
+      const v4 = /^(\d{1,3}\.){3}\d{1,3}$/.test(t);
+      const v6 = t.includes(":") && !t.includes("://");
+      if (!v4 && !v6) {
+        return "PTR needs a numeric IPv4 or IPv6 (resolve a hostname to an IP first if needed).";
+      }
+    }
+    if (kind === "fingerprint" && targetKind === "cidr") {
+      return "HTTP stack fingerprint needs one host, IP, or URL — not a CIDR.";
+    }
+    if (kind === "ct" && targetKind === "cidr") {
+      return "Certificate transparency search does not use CIDR — use a domain or IP.";
+    }
+    if (kind === "wellknown" && targetKind === "cidr") {
+      return "Well-known file probe needs a host, domain, or http(s) URL — not a CIDR.";
     }
     return null;
   };
@@ -314,7 +391,7 @@ export default function ReconPage() {
       <SectionHeader
         eyebrow="Red team"
         title="Recon"
-        description="Recon includes subdomain enum, DNS records, TCP port scan (incl. DB + web profiles), HTTP(S) liveness, security response headers, TLS cert inspection, NVD CVE, and path fuzzing. Only scan assets you are authorised to test; set RECON_TARGET_ALLOWLIST in production."
+        description="Recon: CT (crt.sh), well-known files, HTTP stack hints, reverse DNS, plus port scan (with optional concurrency/timeout), subdomains, DNS, HTTP(S) probes, security headers, TLS, NVD CVE, and path fuzz. Only scan assets you are authorised to test; set RECON_TARGET_ALLOWLIST in production."
       />
 
       {error && (
@@ -361,6 +438,12 @@ export default function ReconPage() {
                 <option value="webfuzz">Web path fuzz</option>
                 <option value="http_headers">Security headers</option>
                 <option value="tls_cert">TLS certificate</option>
+                <option value="fingerprint">HTTP stack fingerprint</option>
+                <option value="wellknown">Well-known (security.txt, robots…)</option>
+              </optgroup>
+              <optgroup label="Intel &amp; DNS">
+                <option value="ct">Certificate transparency (crt.sh)</option>
+                <option value="ptr">Reverse DNS (PTR)</option>
               </optgroup>
             </select>
           </div>
@@ -390,6 +473,60 @@ export default function ReconPage() {
                 disabled={busy}
                 className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-2 text-sm font-mono outline-none focus:border-accent/60"
                 placeholder="80,443,3306,5432,27017"
+              />
+            </div>
+          )}
+          {selectedKind === "port" && (
+            <>
+              <div className="min-w-[90px]">
+                <label className="text-[11px] text-muted uppercase tracking-wider">Concurrency</label>
+                <input
+                  value={portConcurrency}
+                  onChange={(e) => setPortConcurrency(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                  disabled={busy}
+                  className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-2 text-sm font-mono outline-none focus:border-accent/60"
+                  placeholder="def"
+                  title="Optional 1–200 parallel connects (default: server setting)"
+                />
+              </div>
+              <div className="min-w-[90px]">
+                <label className="text-[11px] text-muted uppercase tracking-wider">Timeout s</label>
+                <input
+                  value={portTimeoutSec}
+                  onChange={(e) => {
+                    const x = e.target.value.replace(/[^\d.]/g, "");
+                    setPortTimeoutSec(x.slice(0, 6));
+                  }}
+                  disabled={busy}
+                  className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-2 text-sm font-mono outline-none focus:border-accent/60"
+                  placeholder="def"
+                  title="Per-port connect timeout, 0.25–120s (default: RECON_TIMEOUT_SECONDS)"
+                />
+              </div>
+            </>
+          )}
+          {selectedKind === "fingerprint" && (
+            <div className="min-w-[160px]">
+              <label className="text-[11px] text-muted uppercase tracking-wider">GET path</label>
+              <input
+                value={fpPath}
+                onChange={(e) => setFpPath(e.target.value)}
+                disabled={busy}
+                className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-2 text-sm font-mono outline-none focus:border-accent/60"
+                placeholder="/"
+              />
+            </div>
+          )}
+          {selectedKind === "ct" && (
+            <div className="min-w-[100px]">
+              <label className="text-[11px] text-muted uppercase tracking-wider">Max names</label>
+              <input
+                value={ctMaxNames}
+                onChange={(e) => setCtMaxNames(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                disabled={busy}
+                className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-2 text-sm font-mono outline-none focus:border-accent/60"
+                placeholder="150"
+                title="Max unique cert names to store (10–500)"
               />
             </div>
           )}

@@ -17,6 +17,10 @@ JobKind = Literal[
     "httprobe",
     "http_headers",
     "tls_cert",
+    "ct",
+    "wellknown",
+    "fingerprint",
+    "ptr",
 ]
 JobStatus = Literal["queued", "running", "done", "failed"]
 

@@ -28,6 +28,10 @@ ALLOWED_KINDS = frozenset(
         "httprobe",
         "http_headers",
         "tls_cert",
+        "ct",
+        "wellknown",
+        "fingerprint",
+        "ptr",
     }
 )
 

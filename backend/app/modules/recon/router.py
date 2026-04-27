@@ -136,6 +136,10 @@ async def create_job(
             "httprobe": workers.run_httprobe_job,
             "http_headers": workers.run_http_headers_job,
             "tls_cert": workers.run_tls_cert_job,
+            "ct": workers.run_ct_job,
+            "wellknown": workers.run_wellknown_job,
+            "fingerprint": workers.run_fingerprint_job,
+            "ptr": workers.run_ptr_job,
         }
         task = task_map.get(payload.kind)
         if task is not None:
@@ -249,6 +253,10 @@ async def retry_job(
             "httprobe": workers.run_httprobe_job,
             "http_headers": workers.run_http_headers_job,
             "tls_cert": workers.run_tls_cert_job,
+            "ct": workers.run_ct_job,
+            "wellknown": workers.run_wellknown_job,
+            "fingerprint": workers.run_fingerprint_job,
+            "ptr": workers.run_ptr_job,
         }
         task = task_map.get(job.kind)
         if task is None:

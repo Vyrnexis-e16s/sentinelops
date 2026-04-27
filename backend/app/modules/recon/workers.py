@@ -19,6 +19,10 @@ from app.core.logging import get_logger
 from app.core.redis import init_redis
 from app.modules.recon.models import Finding, ReconJob
 from app.modules.recon.services.cve import is_bare_fqdn_not_cpe, query_cves
+from app.modules.recon.services.ct_search import fetch_crt_sh_entries
+from app.modules.recon.services.reverse_dns import ptr_for_ip_async
+from app.modules.recon.services.stack_fingerprint import fingerprint_url
+from app.modules.recon.services.wellknown_fetch import probe_well_known
 from app.modules.recon.services.dns_recon import collect_records as collect_dns
 from app.modules.recon.services.httprobe import probe as httprobe_urls
 from app.modules.recon.services.http_headers import check_security_headers
@@ -145,12 +149,31 @@ async def _run_portscan(job_id: str, target: str, params: dict[str, Any]) -> dic
     await dispose_engine()
     factory = get_session_factory()
     ports = params.get("ports")
+    conc_raw = params.get("concurrency")
+    conc: int | None = None
+    if isinstance(conc_raw, int) and 1 <= conc_raw <= 200:
+        conc = conc_raw
+    elif isinstance(conc_raw, str) and conc_raw.strip().isdigit():
+        v = int(conc_raw.strip())
+        if 1 <= v <= 200:
+            conc = v
+    to_raw = params.get("timeout") or params.get("per_port_timeout")
+    pto: float | None = None
+    if isinstance(to_raw, (int, float)):
+        pto = float(to_raw)
+    elif isinstance(to_raw, str):
+        try:
+            pto = float(to_raw)
+        except ValueError:
+            pto = None
+    if pto is not None and not (0.25 <= pto <= 120.0):
+        pto = None
     async with factory() as db:
         job = await _claim_for_run(db, uuid.UUID(job_id))
         if job is None:
             return {"error": "missing_or_already_handled"}
         try:
-            results = await scan_host(target, ports=ports)
+            results = await scan_host(target, ports=ports, concurrency=conc, timeout=pto)
         except Exception as exc:  # noqa: BLE001
             await _set_status(db, uuid.UUID(job_id), "failed")
             await db.commit()
@@ -168,7 +191,12 @@ async def _run_portscan(job_id: str, target: str, params: dict[str, Any]) -> dic
             for r in open_results
         ]
         await _persist_findings(db, uuid.UUID(job_id), findings)
-        job.result_json = {"open": [r.port for r in open_results], "tested": len(results)}
+        job.result_json = {
+            "open": [r.port for r in open_results],
+            "tested": len(results),
+            "concurrency": conc,
+            "per_port_timeout_sec": pto,
+        }
         await _set_status(db, uuid.UUID(job_id), "done")
         await db.commit()
 
@@ -500,6 +528,209 @@ async def _run_tls_cert(job_id: str, target: str, params: dict[str, Any]) -> dic
     return {"ok": bool(info.get("ok"))}
 
 
+async def _run_ct(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Certificate Transparency names via crt.sh (public API)."""
+    await dispose_engine()
+    factory = get_session_factory()
+    try:
+        max_names = int(params.get("max_names", 150))
+    except (TypeError, ValueError):
+        max_names = 150
+    max_names = max(10, min(max_names, 500))
+    async with factory() as db:
+        job = await _claim_for_run(db, uuid.UUID(job_id))
+        if job is None:
+            return {"error": "missing_or_already_handled"}
+        rows, http_err = await fetch_crt_sh_entries(target)
+        if http_err or not rows:
+            findings: list[dict[str, Any]] = [
+                {
+                    "severity": "info" if not http_err else "medium",
+                    "title": f"CT search — no entries or error for {target}",
+                    "description": http_err or "empty result (try another domain; IPs may have sparse CT data).",
+                    "evidence": {"target": target, "error": http_err},
+                }
+            ]
+            await _persist_findings(db, uuid.UUID(job_id), findings)
+            job.result_json = {"source": "crt.sh", "count": 0, "error": http_err, "raw_returned": len(rows)}
+            await _set_status(db, uuid.UUID(job_id), "done")
+            await db.commit()
+        else:
+            seen: set[str] = set()
+            findings = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                name = (row.get("name_value") or row.get("common_name") or "").strip()
+                if not name or name in seen:
+                    continue
+                seen.add(name)
+                issuer = (row.get("issuer_name") or "")[:200]
+                findings.append(
+                    {
+                        "severity": "info",
+                        "title": f"CT: {name}",
+                        "description": f"Issuer: {issuer or '—'}",
+                        "evidence": {k: row[k] for k in row if k in ("id", "entry_timestamp", "not_before", "not_after", "name_value", "issuer_name")},  # noqa: E501
+                    }
+                )
+                if len(findings) >= max_names:
+                    break
+            if not findings:
+                findings = [
+                    {
+                        "severity": "info",
+                        "title": f"CT: entries for {target} but no parseable names",
+                        "description": "crt.sh returned rows in an unexpected shape.",
+                        "evidence": {"n": len(rows)},
+                    }
+                ]
+            await _persist_findings(db, uuid.UUID(job_id), findings)
+            job.result_json = {
+                "source": "crt.sh",
+                "unique_names": len({(row.get("name_value") or row.get("common_name") or "") for row in rows if isinstance(row, dict)}),  # noqa: E501
+                "returned": len(rows),
+                "capped": len(seen) >= max_names,
+            }
+            await _set_status(db, uuid.UUID(job_id), "done")
+            await db.commit()
+    await publish(CHANNEL_RECON, {"job_id": job_id, "kind": "ct", "count": len(findings)})
+    return {"ct_names": len(findings)}
+
+
+async def _run_wellknown(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    await dispose_engine()
+    factory = get_session_factory()
+    extra = params.get("paths")
+    path_list: list[str] | None = None
+    if isinstance(extra, list):
+        path_list = [str(p) for p in extra if p]
+    async with factory() as db:
+        job = await _claim_for_run(db, uuid.UUID(job_id))
+        if job is None:
+            return {"error": "missing_or_already_handled"}
+        try:
+            probed = await probe_well_known(target, path_list)
+        except Exception as exc:  # noqa: BLE001
+            await _set_status(db, uuid.UUID(job_id), "failed")
+            await db.commit()
+            log.exception("recon.wellknown.failed", job_id=job_id, error=str(exc))
+            return {"error": str(exc)}
+        findings: list[dict[str, Any]] = []
+        for p in probed:
+            st = p.get("status")
+            if st is not None and isinstance(st, int) and 200 <= st < 300:
+                sev = "low"
+            elif st in (401, 403, 404):
+                sev = "info"
+            else:
+                sev = "medium" if p.get("error") else "low"
+            title = f"{p.get('label', p.get('path'))} — {st if st is not None else p.get('error', 'ok')}"
+            findings.append(
+                {
+                    "severity": sev,
+                    "title": title,
+                    "description": (p.get("snippet") or "")[:800],
+                    "evidence": p,
+                }
+            )
+        if not probed:
+            findings = [
+                {
+                    "severity": "info",
+                    "title": "No well-known paths probed",
+                    "description": "No paths in request — check target format.",
+                    "evidence": {},
+                }
+            ]
+        await _persist_findings(db, uuid.UUID(job_id), findings)
+        job.result_json = {"probed": len(probed)}
+        await _set_status(db, uuid.UUID(job_id), "done")
+        await db.commit()
+    await publish(CHANNEL_RECON, {"job_id": job_id, "kind": "wellknown", "count": len(findings)})
+    return {"probes": len(probed)}
+
+
+async def _run_fingerprint(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    await dispose_engine()
+    factory = get_session_factory()
+    path = str(params.get("path") or "/")
+    if not path.startswith("/"):
+        path = "/" + path
+    async with factory() as db:
+        job = await _claim_for_run(db, uuid.UUID(job_id))
+        if job is None:
+            return {"error": "missing_or_already_handled"}
+        try:
+            info = await fingerprint_url(target, path=path)
+        except Exception as exc:  # noqa: BLE001
+            await _set_status(db, uuid.UUID(job_id), "failed")
+            await db.commit()
+            log.exception("recon.fingerprint.failed", job_id=job_id, error=str(exc))
+            return {"error": str(exc)}
+        if not info.get("ok"):
+            findings = [
+                {
+                    "severity": "medium",
+                    "title": f"Stack fingerprint failed for {target}",
+                    "description": str(info.get("error", "")),
+                    "evidence": info,
+                }
+            ]
+        else:
+            sigs: list[str] = list(info.get("signals") or [])
+            sev = "low" if sigs else "info"
+            findings = [
+                {
+                    "severity": sev,
+                    "title": f"HTTP stack hints ({info.get('status')}) — {', '.join(sigs) or 'no strong signals'}",
+                    "description": f"URL: {info.get('url')} · title: {info.get('title_guess') or '—'}",
+                    "evidence": info,
+                }
+            ]
+        await _persist_findings(db, uuid.UUID(job_id), findings)
+        job.result_json = info
+        await _set_status(db, uuid.UUID(job_id), "done")
+        await db.commit()
+    await publish(CHANNEL_RECON, {"job_id": job_id, "kind": "fingerprint", "count": len(findings)})
+    return {"signals": len((info or {}).get("signals") or [])}
+
+
+async def _run_ptr(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    await dispose_engine()
+    factory = get_session_factory()
+    ip = (params.get("ip") or target or "").strip()
+    async with factory() as db:
+        job = await _claim_for_run(db, uuid.UUID(job_id))
+        if job is None:
+            return {"error": "missing_or_already_handled"}
+        info = await ptr_for_ip_async(ip)
+        if not info.get("ok"):
+            findings = [
+                {
+                    "severity": "info",
+                    "title": f"PTR for {ip}",
+                    "description": str(info.get("error", "no PTR")),
+                    "evidence": info,
+                }
+            ]
+        else:
+            findings = [
+                {
+                    "severity": "low",
+                    "title": f"PTR: {ip} → {info.get('ptr', '—')}",
+                    "description": f"Aliases: {', '.join(info.get('aliases') or []) or '—'}",
+                    "evidence": info,
+                }
+            ]
+        await _persist_findings(db, uuid.UUID(job_id), findings)
+        job.result_json = info
+        await _set_status(db, uuid.UUID(job_id), "done")
+        await db.commit()
+    await publish(CHANNEL_RECON, {"job_id": job_id, "kind": "ptr", "count": len(findings)})
+    return {"ok": bool(info.get("ok"))}
+
+
 # --------------------------------------------------------------------------- #
 # Celery task wrappers                                                        #
 # --------------------------------------------------------------------------- #
@@ -543,6 +774,26 @@ def run_http_headers_job(job_id: str, target: str, params: dict[str, Any]) -> di
 @celery_app.task(name="recon.tls_cert")
 def run_tls_cert_job(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
     return asyncio.run(_run_tls_cert(job_id, target, params or {}))
+
+
+@celery_app.task(name="recon.ct")
+def run_ct_job(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    return asyncio.run(_run_ct(job_id, target, params or {}))
+
+
+@celery_app.task(name="recon.wellknown")
+def run_wellknown_job(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    return asyncio.run(_run_wellknown(job_id, target, params or {}))
+
+
+@celery_app.task(name="recon.fingerprint")
+def run_fingerprint_job(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    return asyncio.run(_run_fingerprint(job_id, target, params or {}))
+
+
+@celery_app.task(name="recon.ptr")
+def run_ptr_job(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    return asyncio.run(_run_ptr(job_id, target, params or {}))
 
 
 @celery_app.task(name="recon.rescue")

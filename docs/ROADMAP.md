@@ -32,6 +32,7 @@ What's here now, what landed recently, and what a **production** build would sti
 
 ## Offensive / Recon (next)
 
+- **Shipped (incremental)** — CT log search (crt.sh JSON), well-known file probe (security.txt / robots.txt), HTTP stack fingerprint (headers + body heuristics), reverse DNS (PTR), port-scan `concurrency` + `per_port_timeout` params.
 - **Distributed workers** — dedicated recon fleet, shard targets, **rate limits** and scope enforcement per legal agreement.
 - **Authenticated scanning** — session cookies, `Authorization: Bearer` replay, form login macros.
 - **Nuclei** — template model compatibility or runner bridge against the same target object model.

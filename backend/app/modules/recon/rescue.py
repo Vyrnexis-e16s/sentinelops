@@ -75,6 +75,10 @@ async def _rescue_one(db: AsyncSession, job: ReconJob) -> str:
         "httprobe": recon_workers.run_httprobe_job,
         "http_headers": recon_workers.run_http_headers_job,
         "tls_cert": recon_workers.run_tls_cert_job,
+        "ct": recon_workers.run_ct_job,
+        "wellknown": recon_workers.run_wellknown_job,
+        "fingerprint": recon_workers.run_fingerprint_job,
+        "ptr": recon_workers.run_ptr_job,
     }
     task = task_map.get(job.kind)
     if task is None:

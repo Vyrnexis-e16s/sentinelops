@@ -283,7 +283,11 @@ const RECON_KINDS = [
   "dns",
   "httprobe",
   "http_headers",
-  "tls_cert"
+  "tls_cert",
+  "ct",
+  "wellknown",
+  "fingerprint",
+  "ptr"
 ] as const;
 
 export { RECON_KINDS };
