@@ -10,7 +10,13 @@ export function isUnauthorized(err: unknown): boolean {
 
 /** Human-readable string from API errors; masks raw JWT text for 401. */
 export function getApiErrorMessage(err: unknown, fallback: string): string {
-  if (!err || typeof err !== "object" || !("status" in err)) return fallback;
+  if (err instanceof TypeError || err instanceof DOMException) {
+    return err.message || fallback;
+  }
+  if (!err || typeof err !== "object" || !("status" in err)) {
+    if (err instanceof Error) return err.message || fallback;
+    return fallback;
+  }
   const a = err as ApiError;
   if (a.status === 401) {
     return "Your session expired. Sign in again to continue.";

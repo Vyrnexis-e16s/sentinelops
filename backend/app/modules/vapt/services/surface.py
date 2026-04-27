@@ -1,6 +1,7 @@
 """Aggregate real metrics from existing SIEM / recon / IDS / vault tables."""
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select

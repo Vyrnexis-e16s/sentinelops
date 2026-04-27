@@ -98,7 +98,11 @@ async def vapt_llm_summarize(
 async def vapt_mitre_foundation(
     user: User = Depends(current_user),  # noqa: ARG001
 ) -> MitreFoundationOut:
-    return MitreFoundationOut(items=mitre_data.load_mitre_foundation())
+    # Coerce to dict[str, str] so Pydantic never fails on odd JSON types in the bundle.
+    items: list[dict[str, str]] = [
+        {str(k): str(v) for k, v in row.items()} for row in mitre_data.load_mitre_foundation()
+    ]
+    return MitreFoundationOut(items=items)
 
 
 @router.get("/ttp", response_model=Paginated[TtpMemoryOut])

@@ -1,6 +1,7 @@
 """IDS API routes."""
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -17,6 +18,17 @@ from app.modules.ids.services.drift import feature_drift_for_key
 from app.services.audit import audit_logger
 
 router = APIRouter(prefix="/ids", tags=["ids"])
+
+
+def _safe_probability(p: float) -> float:
+    """Avoid NaN/inf in JSON responses (Pydantic / clients can choke on non-finite floats)."""
+    try:
+        x = float(p)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(x):
+        return 0.0
+    return x
 
 
 def _ensure_available() -> None:
@@ -65,7 +77,7 @@ async def infer(
         id=row.id,
         timestamp=row.timestamp,
         prediction=row.prediction,
-        probability=row.probability,
+        probability=_safe_probability(row.probability),
         label=row.label,
         attack_class=row.attack_class,
         explanation=result.get("explanation"),
@@ -115,7 +127,7 @@ async def infer_bulk(
             id=p.id,
             timestamp=p.timestamp,
             prediction=p.prediction,
-            probability=p.probability,
+            probability=_safe_probability(p.probability),
             label=p.label,
             attack_class=p.attack_class,
             explanation=None,
@@ -140,7 +152,7 @@ async def list_inferences(
             id=r.id,
             timestamp=r.timestamp,
             prediction=r.prediction,
-            probability=r.probability,
+            probability=_safe_probability(r.probability),
             label=r.label,
             attack_class=r.attack_class,
             explanation=None,

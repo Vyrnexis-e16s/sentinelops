@@ -46,6 +46,11 @@ async function request<T>(
     ) {
       detail = "Your session expired. Please sign in again.";
     }
+    if (res.status >= 500 && /^an unexpected error occurred$/i.test(detail.trim())) {
+      detail =
+        "Server error — check API logs, database, and run `alembic upgrade head` if tables are missing. " +
+        "The VAPT page can still load partial data if only one service fails.";
+    }
     const err: ApiError = { status: res.status, detail };
     throw err;
   }

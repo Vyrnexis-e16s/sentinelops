@@ -74,30 +74,37 @@ export default function VaptPage() {
   const load = useCallback(async () => {
     setErr(null);
     setBusy((b) => ({ ...b, load: true }));
-    try {
-      const [s, b, ttp, ge, fb, m] = await Promise.all([
-        api.get<VaptSurface>("/api/v1/vapt/surface"),
-        api.get<Paginated<VaptBrief>>("/api/v1/vapt/briefs?size=30"),
-        api.get<Paginated<VaptTtpMemory>>("/api/v1/vapt/ttp?size=50"),
-        api.get<Paginated<VaptGraphEdge>>("/api/v1/vapt/graph/edges?size=100"),
-        api.get<Paginated<VaptAnalystFeedback>>("/api/v1/vapt/feedback?size=30"),
-        api.get<MitreFoundationOut>("/api/v1/vapt/mitre/foundation")
-      ]);
-      setSurface(s);
-      setBriefs(b.items);
-      setTtpRows(ttp.items);
-      setEdges(ge.items);
-      setFeedback(fb.items);
-      setMitre(m);
-    } catch (e) {
-      if (isUnauthorized(e)) {
+    const settled = await Promise.allSettled([
+      api.get<VaptSurface>("/api/v1/vapt/surface"),
+      api.get<Paginated<VaptBrief>>("/api/v1/vapt/briefs?size=30"),
+      api.get<Paginated<VaptTtpMemory>>("/api/v1/vapt/ttp?size=50"),
+      api.get<Paginated<VaptGraphEdge>>("/api/v1/vapt/graph/edges?size=100"),
+      api.get<Paginated<VaptAnalystFeedback>>("/api/v1/vapt/feedback?size=30"),
+      api.get<MitreFoundationOut>("/api/v1/vapt/mitre/foundation")
+    ]);
+    for (const x of settled) {
+      if (x.status === "rejected" && isUnauthorized(x.reason)) {
         redirectToReauth();
+        setBusy((b) => ({ ...b, load: false }));
         return;
       }
-      setErr(getApiErrorMessage(e, "Failed to load VAPT data."));
-    } finally {
-      setBusy((b) => ({ ...b, load: false }));
     }
+    const labels = ["Surface", "Briefs", "TTP memory", "Graph edges", "Feedback", "MITRE bundle"] as const;
+    const parts: string[] = [];
+    if (settled[0].status === "fulfilled") setSurface(settled[0].value);
+    else parts.push(`${labels[0]}: ${getApiErrorMessage(settled[0].reason, "failed")}`);
+    if (settled[1].status === "fulfilled") setBriefs(settled[1].value.items);
+    else parts.push(`${labels[1]}: ${getApiErrorMessage(settled[1].reason, "failed")}`);
+    if (settled[2].status === "fulfilled") setTtpRows(settled[2].value.items);
+    else parts.push(`${labels[2]}: ${getApiErrorMessage(settled[2].reason, "failed")}`);
+    if (settled[3].status === "fulfilled") setEdges(settled[3].value.items);
+    else parts.push(`${labels[3]}: ${getApiErrorMessage(settled[3].reason, "failed")}`);
+    if (settled[4].status === "fulfilled") setFeedback(settled[4].value.items);
+    else parts.push(`${labels[4]}: ${getApiErrorMessage(settled[4].reason, "failed")}`);
+    if (settled[5].status === "fulfilled") setMitre(settled[5].value);
+    else parts.push(`${labels[5]}: ${getApiErrorMessage(settled[5].reason, "failed")}`);
+    if (parts.length) setErr(parts.join(" · "));
+    setBusy((b) => ({ ...b, load: false }));
   }, []);
 
   useEffect(() => {
@@ -108,64 +115,86 @@ export default function VaptPage() {
   const assembleContext = useCallback(async () => {
     setErr(null);
     setBusy((b) => ({ ...b, load: true }));
-    try {
-      const [s, f, a, i] = await Promise.all([
-        api.get<VaptSurface>("/api/v1/vapt/surface"),
-        api.get<Paginated<ReconFinding>>("/api/v1/recon/findings?size=120"),
-        api.get<Paginated<Alert>>("/api/v1/siem/alerts?size=15"),
-        api.get<Inference[]>("/api/v1/ids/inferences?limit=25")
-      ]);
-      setSurface(s);
-      const seen = new Set<string>();
-      const reconDedup: { severity: string; title: string; description: string }[] = [];
-      for (const x of f.items) {
-        // Dedupe by title so repeated port/webfuzz rows across jobs don’t fill the excerpt.
-        const key = x.title;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        reconDedup.push({
-          severity: x.severity,
-          title: x.title,
-          description: (x.description || "").slice(0, 500)
-        });
-        if (reconDedup.length >= 40) break;
-      }
-      const block = {
-        vapt_surface: s,
-        recon_findings_excerpt: reconDedup,
-        siem_alerts_excerpt: a.items.map((x) => ({
-          rule: x.rule_name,
-          score: x.score,
-          status: x.status
-        })),
-        ids_inferences_excerpt: (() => {
-          const s = new Set<string>();
-          const out: { label: string; prediction: string; probability: number }[] = [];
-          for (const x of i) {
-            const k = `${x.label}\t${x.prediction}\t${x.probability}`;
-            if (s.has(k)) continue;
-            s.add(k);
-            out.push({
-              label: x.label,
-              prediction: x.prediction,
-              probability: x.probability
-            });
-            if (out.length >= 15) break;
-          }
-          return out;
-        })()
-      };
-      setCtx(JSON.stringify(block, null, 2));
-    } catch (e) {
-      if (isUnauthorized(e)) {
+    const settled = await Promise.allSettled([
+      api.get<VaptSurface>("/api/v1/vapt/surface"),
+      api.get<Paginated<ReconFinding>>("/api/v1/recon/findings?size=120"),
+      api.get<Paginated<Alert>>("/api/v1/siem/alerts?size=15"),
+      api.get<Inference[]>("/api/v1/ids/inferences?limit=25")
+    ]);
+    for (const x of settled) {
+      if (x.status === "rejected" && isUnauthorized(x.reason)) {
         redirectToReauth();
+        setBusy((b) => ({ ...b, load: false }));
         return;
       }
-      setErr(getApiErrorMessage(e, "Could not assemble context from the API."));
-    } finally {
-      setBusy((b) => ({ ...b, load: false }));
     }
-  }, []);
+    const asmLabels = ["Surface", "Recon findings", "SIEM alerts", "IDS inferences"] as const;
+    const warn: string[] = [];
+    let s: VaptSurface | null = null;
+    if (settled[0].status === "fulfilled") {
+      s = settled[0].value;
+      setSurface(s);
+    } else warn.push(`${asmLabels[0]}: ${getApiErrorMessage(settled[0].reason, "failed")}`);
+    const f =
+      settled[1].status === "fulfilled"
+        ? settled[1].value
+        : ({ items: [] as ReconFinding[] } as Paginated<ReconFinding>);
+    if (settled[1].status === "rejected")
+      warn.push(`${asmLabels[1]}: ${getApiErrorMessage(settled[1].reason, "failed")}`);
+    const a =
+      settled[2].status === "fulfilled"
+        ? settled[2].value
+        : ({ items: [] as Alert[] } as Paginated<Alert>);
+    if (settled[2].status === "rejected")
+      warn.push(`${asmLabels[2]}: ${getApiErrorMessage(settled[2].reason, "failed")}`);
+    const i = settled[3].status === "fulfilled" ? settled[3].value : ([] as Inference[]);
+    if (settled[3].status === "rejected")
+      warn.push(`${asmLabels[3]}: ${getApiErrorMessage(settled[3].reason, "failed")}`);
+
+    const seen = new Set<string>();
+    const reconDedup: { severity: string; title: string; description: string }[] = [];
+    for (const x of f.items) {
+      const key = x.title;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      reconDedup.push({
+        severity: x.severity,
+        title: x.title,
+        description: (x.description || "").slice(0, 500)
+      });
+      if (reconDedup.length >= 40) break;
+    }
+    const surfaceForBlock = s ?? surface;
+    const block: Record<string, unknown> = {
+      vapt_surface: surfaceForBlock ?? undefined,
+      recon_findings_excerpt: reconDedup,
+      siem_alerts_excerpt: a.items.map((x) => ({
+        rule: x.rule_name,
+        score: x.score,
+        status: x.status
+      })),
+      ids_inferences_excerpt: (() => {
+        const dedup = new Set<string>();
+        const out: { label: string; prediction: string; probability: number }[] = [];
+        for (const x of i) {
+          const k = `${x.label}\t${x.prediction}\t${x.probability}`;
+          if (dedup.has(k)) continue;
+          dedup.add(k);
+          out.push({
+            label: x.label,
+            prediction: x.prediction,
+            probability: x.probability
+          });
+          if (out.length >= 15) break;
+        }
+        return out;
+      })()
+    };
+    if (warn.length) block.assemble_partial_errors = warn;
+    setCtx(JSON.stringify(block, null, 2));
+    if (warn.length) setErr(warn.join(" · "));
+    setBusy((b) => ({ ...b, load: false }));
+  }, [surface]);
 
   const generate = async () => {
     if (!ctx.trim()) {
