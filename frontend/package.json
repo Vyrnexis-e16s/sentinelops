@@ -23,7 +23,7 @@
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "tailwind-merge": "^2.5.4",
-    "three": "^0.169.0",
+    "three": "^0.184.0",
     "zustand": "^4.5.5"
   },
   "devDependencies": {
