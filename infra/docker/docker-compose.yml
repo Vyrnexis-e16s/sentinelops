@@ -32,12 +32,17 @@ services:
     ports:
       - "6379:6379"
 
+  # host.docker.internal → host gateway (Linux: Docker 20.10+; Windows/mac: built-in) so
+  # SENTINELOPS_LLM_BASE_URL can reach Ollama on the host, not 127.0.0.1 inside the container.
+  # See docs/LOCAL_LLM.md §4.
   backend:
     build:
       context: ../../backend
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file: ../../.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       db:
         condition: service_healthy
@@ -62,6 +67,8 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file: ../../.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       backend:
         condition: service_started
@@ -92,6 +99,8 @@ services:
       retries: 3
       start_period: 20s
 
+  # UI: browser → localhost:3000. Next in the container must listen on 0.0.0.0
+  # (see frontend package.json "dev" / "start" -H 0.0.0.0) or the host cannot connect.
   frontend:
     build:
       context: ../../frontend

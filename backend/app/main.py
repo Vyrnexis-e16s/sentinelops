@@ -34,6 +34,20 @@ log = structlog.get_logger(__name__)
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
     log.info("app_startup", env=settings.app_env)
+    _llm_base = (settings.sentinelops_llm_base_url or "").lower()
+    if settings.postgres_host == "db" and (
+        "127.0.0.1" in _llm_base
+        or "localhost" in _llm_base
+    ):
+        log.warning(
+            "llm_base_url_looks_loopback",
+            message=(
+                "SENTINELOPS_LLM_BASE_URL points at loopback. "
+                "From the API container, 127.0.0.1 is the container itself, not your host. "
+                "For Ollama on the host set SENTINELOPS_LLM_BASE_URL=http://host.docker.internal:11434/v1 "
+                "(compose includes extra_hosts for Linux). See docs/LOCAL_LLM.md §4."
+            ),
+        )
 
     # In dev we let alembic create the schema lazily on first run; in prod CI
     # runs migrations explicitly before booting.

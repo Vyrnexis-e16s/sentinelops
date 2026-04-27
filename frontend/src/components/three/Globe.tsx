@@ -17,8 +17,9 @@ export default function Globe({ height = 360 }: { height?: number }) {
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    const w = el.clientWidth;
     const h = height;
+    const getW = () => Math.max(1, el.clientWidth);
+    let w = getW();
     renderer.setSize(w, h);
     el.appendChild(renderer.domElement);
 
@@ -84,15 +85,19 @@ export default function Globe({ height = 360 }: { height?: number }) {
     animate();
 
     const onResize = () => {
-      const newW = el.clientWidth;
-      renderer.setSize(newW, h);
-      camera.aspect = newW / h;
+      w = getW();
+      renderer.setSize(w, h);
+      camera.aspect = w / h;
       camera.updateProjectionMatrix();
     };
     window.addEventListener("resize", onResize);
+    const ro = new ResizeObserver(() => onResize());
+    ro.observe(el);
+    onResize();
 
     return () => {
       cancelAnimationFrame(raf);
+      ro.disconnect();
       window.removeEventListener("resize", onResize);
       renderer.dispose();
       el.removeChild(renderer.domElement);
