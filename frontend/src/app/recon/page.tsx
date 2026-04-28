@@ -82,17 +82,28 @@ function formatElapsed(startedAt: string | null, finishedAt: string | null): str
   return `${min}m ${rest}s`;
 }
 
-function summariseResult(job: ReconJob): string {
+function summariseResult(job: ReconJob, jobFindings?: ReconFinding[]): string {
   const r = job.result_json || {};
   if (typeof r.error === "string" && r.error) return r.error;
+  // Live findings count for this job — used as a fallback for "completed" jobs
+  // whose `result_json` was overwritten by an old rescue path. The findings
+  // table is the source of truth; result_json is only a denormalized summary.
+  const liveCount = jobFindings ? jobFindings.length : undefined;
   if (job.kind === "subdomain") {
-    const count = typeof r.count === "number" ? r.count : Array.isArray(r.hits) ? r.hits.length : 0;
+    let count: number;
+    if (typeof r.count === "number") count = r.count;
+    else if (Array.isArray(r.hits)) count = r.hits.length;
+    else if (job.status === "done" && typeof liveCount === "number") count = liveCount;
+    else count = 0;
     return `${count} live subdomain${count === 1 ? "" : "s"}`;
   }
   if (job.kind === "port") {
-    const open = Array.isArray(r.open) ? r.open.length : 0;
+    let open: number;
+    if (Array.isArray(r.open)) open = r.open.length;
+    else if (job.status === "done" && typeof liveCount === "number") open = liveCount;
+    else open = 0;
     const tested = typeof r.tested === "number" ? r.tested : 0;
-    return `${open} open / ${tested} tested`;
+    return tested ? `${open} open / ${tested} tested` : `${open} open port${open === 1 ? "" : "s"}`;
   }
   if (job.kind === "cve") {
     const total = typeof r.total_results === "number" ? r.total_results : 0;
@@ -598,6 +609,7 @@ export default function ReconPage() {
           elapsed={formatElapsed(watchedJob.started_at, watchedJob.finished_at)}
           onDismiss={() => setWatchJobId(null)}
           tick={elapsedTick}
+          jobFindings={findings.filter((f) => f.job_id === watchedJob.id)}
         />
       )}
 
@@ -606,6 +618,7 @@ export default function ReconPage() {
         <JobsCard
           jobs={jobs}
           targetById={targetById}
+          findings={findings}
           onPick={(id) => setWatchJobId(id)}
           onRetry={async (id) => {
             setError(null);
@@ -631,17 +644,19 @@ function WatchJobCard({
   target,
   elapsed,
   onDismiss,
-  tick
+  tick,
+  jobFindings
 }: {
   job: ReconJob;
   target: string | undefined;
   elapsed: string;
   onDismiss: () => void;
   tick: number;
+  jobFindings: ReconFinding[];
 }) {
   void tick; /* ensures re-render on each 1s elapsed update */
   const terminal = isTerminal(job.status);
-  const summary = terminal ? summariseResult(job) : null;
+  const summary = terminal ? summariseResult(job, jobFindings) : null;
   const bar =
     job.status === "queued"
       ? "bg-muted"
@@ -797,14 +812,25 @@ function FindingsCard({
 function JobsCard({
   jobs,
   targetById,
+  findings,
   onPick,
   onRetry
 }: {
   jobs: ReconJob[];
   targetById: Record<string, string>;
+  findings: ReconFinding[];
   onPick: (id: string) => void;
   onRetry: (id: string) => Promise<void>;
 }) {
+  const findingsByJob = useMemo(() => {
+    const m = new Map<string, ReconFinding[]>();
+    findings.forEach((f) => {
+      const arr = m.get(f.job_id);
+      if (arr) arr.push(f);
+      else m.set(f.job_id, [f]);
+    });
+    return m;
+  }, [findings]);
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const handleRetry = async (id: string) => {
     setRetryingId(id);
@@ -884,7 +910,7 @@ function JobsCard({
                 )}
                 {isTerminal(j.status) && (
                   <span className="basis-full text-[11px] text-muted pl-4">
-                    {summariseResult(j)}
+                    {summariseResult(j, findingsByJob.get(j.id))}
                   </span>
                 )}
                 {typeof j.result_json?.error === "string" && (

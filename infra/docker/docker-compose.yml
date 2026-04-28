@@ -116,7 +116,10 @@ services:
     environment:
       NODE_ENV: development
       NEXT_TELEMETRY_DISABLED: "1"
-      # Windows / macOS bind mounts: stable file watching for dev server
+      # Windows / macOS bind mounts under WSL2: webpack's inotify can miss file
+      # events on /mnt/c/* paths. Polling fixes that for the webpack fallback
+      # (`pnpm dev:webpack`); Turbopack uses its own native watcher and ignores
+      # these envs, so they're safe to leave on either bundler.
       WATCHPACK_POLLING: "true"
       CHOKIDAR_USEPOLLING: "true"
       INTERNAL_API_URL: http://backend:8000
@@ -136,8 +139,14 @@ services:
       start_period: 90s
     volumes:
       - ../../frontend:/app
+      # Mask the host's node_modules (Linux container needs Linux binaries
+      # for the lockfile, not whatever Windows installed under the bind).
       - /app/node_modules
-      - /app/.next
+      # Persistent named volume for Next's compile cache. Keeping this across
+      # `docker compose down` skips the 30-60s "first compile" hit on every
+      # subsequent `up`. Use `docker compose down -v` to wipe if it ever gets
+      # corrupted (rare, but Turbopack/webpack swaps can confuse the cache).
+      - frontend_next_cache:/app/.next
     ports:
       - "3000:3000"
     command: ["pnpm", "dev"]
@@ -146,3 +155,4 @@ volumes:
   db_data:
   redis_data:
   vault_data:
+  frontend_next_cache:

@@ -38,7 +38,7 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update as sql_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import dispose_engine, get_session_factory
@@ -104,12 +104,38 @@ async def _rescue_one(db: AsyncSession, job: ReconJob) -> str:
         }
         return "failed"
 
-    job.result_json = {
+    # Race guard: between the SELECT in `rescue_orphan_recon_jobs` and this
+    # commit, the worker may have already claimed the row, run the job, and
+    # written its real `result_json` (e.g. {"count": 3, "hits": [...]}). If we
+    # write the rescue snapshot via the ORM-attached `job` object, that good
+    # result_json will be silently clobbered on commit — leaving the UI with
+    # 3 findings but a "0 live subdomains" summary.
+    #
+    # Use a conditional UPDATE that only fires while status is still 'queued'.
+    # Once the worker flips status to 'running' or 'done', this matches zero
+    # rows and we leave the worker's payload untouched.
+    rescue_payload = {
         **(job.result_json or {}),
         "celery_task_id": async_result.id,
         "queue": "recon",
         "rescued_at": datetime.now(tz=timezone.utc).isoformat(),
     }
+    res = await db.execute(
+        sql_update(ReconJob)
+        .where(ReconJob.id == job.id, ReconJob.status == "queued")
+        .values(result_json=rescue_payload)
+    )
+    if res.rowcount == 0:
+        log.info(
+            "recon.rescue.skipped_no_longer_queued",
+            job_id=str(job.id),
+            new_task_id=async_result.id,
+        )
+        # Don't poison the session with a stale in-memory mutation — refresh
+        # the row so a later flush in the same transaction can't accidentally
+        # write our `job.result_json` value.
+        await db.refresh(job)
+        return "skipped"
     return "redispatched"
 
 
@@ -127,7 +153,7 @@ async def rescue_orphan_recon_jobs() -> dict[str, int]:
     # "Task ... attached to a different loop" on the first await.
     await dispose_engine()
     factory = get_session_factory()
-    counts = {"redispatched": 0, "failed": 0, "scanned": 0}
+    counts = {"redispatched": 0, "failed": 0, "skipped": 0, "scanned": 0}
     async with factory() as db:
         rows = (
             await db.execute(
@@ -148,6 +174,7 @@ async def rescue_orphan_recon_jobs() -> dict[str, int]:
             scanned=counts["scanned"],
             redispatched=counts["redispatched"],
             failed=counts["failed"],
+            skipped=counts["skipped"],
         )
     return counts
 
