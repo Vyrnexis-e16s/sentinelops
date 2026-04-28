@@ -2,14 +2,28 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { CheckCircle2, Loader2, Play, RefreshCw, XCircle } from "lucide-react";
+import {
+  Calendar,
+  CheckCircle2,
+  Download,
+  GitCompareArrows,
+  Loader2,
+  Network,
+  Play,
+  RefreshCw,
+  Search,
+  XCircle
+} from "lucide-react";
 import SectionHeader from "@/components/shared/SectionHeader";
 import {
   api,
   type ApiError,
   type Paginated,
+  type ReconDiffResult,
   type ReconFinding,
+  type ReconGraphResult,
   type ReconJob,
+  type ReconSchedule,
   type ReconTarget
 } from "@/lib/api";
 import { runDeferred } from "@/lib/schedule-deferred";
@@ -26,8 +40,56 @@ type JobKind =
   | "ct"
   | "wellknown"
   | "fingerprint"
-  | "ptr";
+  | "ptr"
+  | "takeover"
+  | "axfr"
+  | "robots_sitemap"
+  | "js_endpoints"
+  | "cookie_audit"
+  | "tls_audit"
+  | "wayback";
 type TargetKind = "domain" | "host" | "cidr";
+
+const KIND_HINTS: Record<JobKind, string> = {
+  subdomain:
+    "Brute-force common subdomain names against the apex DNS — surfaces dev/staging/admin hosts. Needs a domain (example.com).",
+  port:
+    "TCP connect scan with optional concurrency/timeout. Pick a profile (web/db/remote/full) or paste custom ports. Use a host or IP.",
+  cve:
+    "NVD CVE lookup by CPE. Either a full cpe:2.3:… string or shorthand like nginx:1.25.3. Tip: run a fingerprint job first.",
+  webfuzz:
+    "Path fuzz against a live HTTP service (200/401/403/etc). Feed it disallow paths from robots_sitemap or paths from js_endpoints.",
+  dns:
+    "Resolve A/AAAA/MX/NS/TXT/CNAME for the host. Quick reconnaissance baseline; pairs well with axfr.",
+  httprobe:
+    "Reach out to http(s)://target/ and record server, title, response size, request/response bytes and request duration (IDS-friendly).",
+  http_headers:
+    "Score response security headers (HSTS, CSP, X-Frame-Options, COOP, …). Use https_only to skip cleartext fallback.",
+  tls_cert:
+    "Single TLS handshake — pulls the leaf cert (CN/SAN, validity, days_left). Cheap; pairs with the deeper tls_audit.",
+  ct:
+    "Crowd-sourced subdomain hint via Certificate Transparency (crt.sh). Catches names that don't show up in DNS brute-force.",
+  wellknown:
+    "Probe /.well-known/ files (security.txt, openid-configuration, robots.txt, …). Useful for stack inference.",
+  fingerprint:
+    "Single GET against a chosen path; parses Server / X-Powered-By / common framework hints into CPE candidates.",
+  ptr:
+    "Reverse DNS for a single IP. Useful after a subdomain resolves to an unknown IP, to identify the hosting provider.",
+  takeover:
+    "Follow each subdomain's CNAME chain and match dangling cloud tenants (GitHub Pages, Heroku, S3, …). High-impact bug-class.",
+  axfr:
+    "Attempt a DNS zone transfer against every authoritative NS. Refused = expected. Successful = leaks the entire internal zone.",
+  robots_sitemap:
+    "Fetch robots.txt + sitemap.xml — emits Disallow paths and sitemap URLs as a seed list for webfuzz.",
+  js_endpoints:
+    "Fetch the homepage, walk <script src=> bundles, regex out /api/*, /v1/*, fetch(), axios() endpoints.",
+  cookie_audit:
+    "Parse every Set-Cookie in the response chain — flags missing Secure / HttpOnly / SameSite, bad __Host- usage, etc.",
+  tls_audit:
+    "Negotiates TLS 1.0/1.1/1.2/1.3 individually, records the cipher, validates the chain, checks SAN match — outputs a grade.",
+  wayback:
+    "Pull historical URLs for the host from web.archive.org/CDX. Emits unique paths that can seed webfuzz."
+};
 
 /** Port scan dropdown: `full` omits the list so the API uses the server default (broad). */
 type PortScanPreset = "full" | "web" | "databases" | "remote" | "custom";
@@ -161,6 +223,47 @@ function summariseResult(job: ReconJob, jobFindings?: ReconFinding[]): string {
     }
     return (r as { error?: string }).error || "Reverse DNS";
   }
+  if (job.kind === "takeover") {
+    const vuln = ((r as { vulnerable?: unknown[] }).vulnerable || []).length;
+    const tested = ((r as { results?: unknown[] }).results || []).length;
+    if (vuln > 0) return `${vuln} likely takeover${vuln === 1 ? "" : "s"} (of ${tested} candidates)`;
+    return `${tested} candidate${tested === 1 ? "" : "s"} checked, no takeover marker`;
+  }
+  if (job.kind === "axfr") {
+    if ((r as { any_leak?: boolean }).any_leak) return "AXFR LEAKS records — fix NS ACLs immediately";
+    const ns = ((r as { nameservers?: string[] }).nameservers || []).length;
+    return ns ? `AXFR refused on ${ns} NS (expected)` : "no NS records";
+  }
+  if (job.kind === "robots_sitemap") {
+    const dis = ((r as { disallow?: string[] }).disallow || []).length;
+    const sm = ((r as { sitemap_urls?: string[] }).sitemap_urls || []).length;
+    return `${dis} disallow + ${sm} sitemap URL${sm === 1 ? "" : "s"}`;
+  }
+  if (job.kind === "js_endpoints") {
+    const paths = ((r as { paths?: string[] }).paths || []).length;
+    const scripts = ((r as { scripts_seen?: string[] }).scripts_seen || []).length;
+    return `${paths} unique path${paths === 1 ? "" : "s"} from ${scripts} JS bundle${scripts === 1 ? "" : "s"}`;
+  }
+  if (job.kind === "cookie_audit") {
+    const summary = (r as { summary?: { total?: number; with_issues?: number; high?: number } }).summary || {};
+    if (typeof summary.with_issues === "number" && summary.total) {
+      return `${summary.with_issues}/${summary.total} cookie${summary.total === 1 ? "" : "s"} with issues${summary.high ? ` (${summary.high} high)` : ""}`;
+    }
+    return (r as { error?: string }).error || "no cookies set";
+  }
+  if (job.kind === "tls_audit") {
+    if ((r as { ok?: boolean }).ok) {
+      const grade = (r as { grade?: string }).grade || "?";
+      const issues = ((r as { issues?: string[] }).issues || []).length;
+      return `Grade ${grade}${issues ? ` · ${issues} issue${issues === 1 ? "" : "s"}` : ""}`;
+    }
+    return (r as { error?: string }).error || "TLS audit error";
+  }
+  if (job.kind === "wayback") {
+    const n = (r as { count?: number }).count;
+    if (typeof n === "number") return `${n} unique historical URL${n === 1 ? "" : "s"}`;
+    return (r as { error?: string }).error || "Wayback query";
+  }
   return "completed";
 }
 
@@ -180,6 +283,15 @@ export default function ReconPage() {
   const [fpPath, setFpPath] = useState("/");
   /** CT (crt.sh) max unique names to persist. */
   const [ctMaxNames, setCtMaxNames] = useState("150");
+  /** Wayback CDX hard cap. */
+  const [waybackLimit, setWaybackLimit] = useState("200");
+  const [waybackOnly2xx, setWaybackOnly2xx] = useState(false);
+  /** Robots/sitemap path cap. */
+  const [robotsMaxPaths, setRobotsMaxPaths] = useState("250");
+  /** JS endpoint extractor — script cap. */
+  const [jsMaxScripts, setJsMaxScripts] = useState("8");
+  /** Takeover candidate names — empty = pull from latest subdomain job. */
+  const [takeoverNames, setTakeoverNames] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -301,6 +413,38 @@ export default function ReconPage() {
     if (kind === "wellknown" || kind === "ptr") {
       return {};
     }
+    if (kind === "tls_audit") {
+      const p = Number.parseInt(tlsPort, 10);
+      return { port: Number.isInteger(p) && p > 0 && p <= 65535 ? p : 443 };
+    }
+    if (kind === "wayback") {
+      const out: Record<string, unknown> = {};
+      const n = Number.parseInt(waybackLimit, 10);
+      if (Number.isInteger(n) && n > 0) out.limit = Math.min(5000, n);
+      if (waybackOnly2xx) out.only_2xx = true;
+      return out;
+    }
+    if (kind === "robots_sitemap") {
+      const n = Number.parseInt(robotsMaxPaths, 10);
+      return Number.isInteger(n) && n > 0 ? { max_paths: Math.min(2000, n) } : {};
+    }
+    if (kind === "js_endpoints") {
+      const n = Number.parseInt(jsMaxScripts, 10);
+      return Number.isInteger(n) && n > 0 ? { max_scripts: Math.min(32, n) } : {};
+    }
+    if (kind === "cookie_audit") {
+      return httpsOnly ? { https_only: true } : {};
+    }
+    if (kind === "takeover") {
+      const names = takeoverNames
+        .split(/[\s,]+/)
+        .map((n) => n.trim())
+        .filter(Boolean);
+      return names.length ? { names } : {};
+    }
+    if (kind === "axfr") {
+      return {};
+    }
     return {};
   };
 
@@ -352,6 +496,21 @@ export default function ReconPage() {
     }
     if (kind === "wellknown" && targetKind === "cidr") {
       return "Well-known file probe needs a host, domain, or http(s) URL — not a CIDR.";
+    }
+    if (kind === "axfr" && targetKind !== "domain") {
+      return "AXFR runs against a domain's authoritative NS — pass a domain like example.com, not an IP/CIDR.";
+    }
+    if ((kind === "robots_sitemap" || kind === "js_endpoints" || kind === "cookie_audit" || kind === "wayback") && targetKind === "cidr") {
+      return "This kind needs a host or domain (with HTTP service), not a CIDR.";
+    }
+    if (kind === "tls_audit" && targetKind === "cidr") {
+      return "TLS deep audit needs a single host, IP, or https:// URL — not a CIDR.";
+    }
+    if (kind === "takeover") {
+      const namesRaw = takeoverNames.trim();
+      if (targetKind !== "domain" && !namesRaw) {
+        return "Takeover detection needs either a domain (so we can reuse the last subdomain job) or an explicit list of names in 'Names'.";
+      }
     }
     return null;
   };
@@ -441,22 +600,30 @@ export default function ReconPage() {
                 <option value="dns">DNS (A, MX, NS, TXT…)</option>
                 <option value="port">Port scan</option>
                 <option value="httprobe">HTTP(S) live probe</option>
+                <option value="ct">Certificate transparency (crt.sh)</option>
+                <option value="wayback">Wayback Machine (historical URLs)</option>
               </optgroup>
               <optgroup label="Vulnerabilities">
                 <option value="cve">CVE lookup (NVD)</option>
+                <option value="takeover">Subdomain takeover</option>
+                <option value="axfr">DNS zone transfer (AXFR)</option>
               </optgroup>
               <optgroup label="Web &amp; transport">
                 <option value="webfuzz">Web path fuzz</option>
                 <option value="http_headers">Security headers</option>
-                <option value="tls_cert">TLS certificate</option>
+                <option value="cookie_audit">Cookie / Set-Cookie audit</option>
+                <option value="tls_cert">TLS certificate (quick)</option>
+                <option value="tls_audit">TLS deep audit (cipher / chain / SAN)</option>
                 <option value="fingerprint">HTTP stack fingerprint</option>
                 <option value="wellknown">Well-known (security.txt, robots…)</option>
+                <option value="robots_sitemap">robots.txt + sitemap.xml</option>
+                <option value="js_endpoints">JS endpoint extractor</option>
               </optgroup>
-              <optgroup label="Intel &amp; DNS">
-                <option value="ct">Certificate transparency (crt.sh)</option>
+              <optgroup label="DNS intel">
                 <option value="ptr">Reverse DNS (PTR)</option>
               </optgroup>
             </select>
+            <p className="mt-1 text-[11px] text-muted leading-snug">{KIND_HINTS[selectedKind]}</p>
           </div>
           {selectedKind === "port" && (
             <div className="min-w-[200px]">
@@ -567,7 +734,7 @@ export default function ReconPage() {
               />
             </div>
           )}
-          {(selectedKind === "httprobe" || selectedKind === "http_headers") && (
+          {(selectedKind === "httprobe" || selectedKind === "http_headers" || selectedKind === "cookie_audit") && (
             <label className="flex items-center gap-2 self-end text-[11px] text-muted min-w-[200px] pb-0.5 cursor-pointer">
               <input
                 type="checkbox"
@@ -578,6 +745,83 @@ export default function ReconPage() {
               />
               <span>HTTPS only (no cleartext fallback)</span>
             </label>
+          )}
+          {selectedKind === "tls_audit" && (
+            <div className="min-w-[100px]">
+              <label className="text-[11px] text-muted uppercase tracking-wider">TLS port</label>
+              <input
+                value={tlsPort}
+                onChange={(e) => setTlsPort(e.target.value.replace(/\D/g, "").slice(0, 5))}
+                disabled={busy}
+                className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-2 text-sm font-mono outline-none focus:border-accent/60"
+                placeholder="443"
+              />
+            </div>
+          )}
+          {selectedKind === "wayback" && (
+            <>
+              <div className="min-w-[100px]">
+                <label className="text-[11px] text-muted uppercase tracking-wider">Limit</label>
+                <input
+                  value={waybackLimit}
+                  onChange={(e) => setWaybackLimit(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                  disabled={busy}
+                  className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-2 text-sm font-mono outline-none focus:border-accent/60"
+                  placeholder="200"
+                  title="Max unique URLs to keep (10 – 5000)"
+                />
+              </div>
+              <label className="flex items-center gap-2 self-end text-[11px] text-muted pb-0.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={waybackOnly2xx}
+                  onChange={(e) => setWaybackOnly2xx(e.target.checked)}
+                  disabled={busy}
+                  className="rounded border-border accent-accent"
+                />
+                <span>Only 2xx historical statuses</span>
+              </label>
+            </>
+          )}
+          {selectedKind === "robots_sitemap" && (
+            <div className="min-w-[110px]">
+              <label className="text-[11px] text-muted uppercase tracking-wider">Max paths</label>
+              <input
+                value={robotsMaxPaths}
+                onChange={(e) => setRobotsMaxPaths(e.target.value.replace(/\D/g, "").slice(0, 4))}
+                disabled={busy}
+                className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-2 text-sm font-mono outline-none focus:border-accent/60"
+                placeholder="250"
+                title="Cap total paths kept (10 – 2000)"
+              />
+            </div>
+          )}
+          {selectedKind === "js_endpoints" && (
+            <div className="min-w-[110px]">
+              <label className="text-[11px] text-muted uppercase tracking-wider">Max scripts</label>
+              <input
+                value={jsMaxScripts}
+                onChange={(e) => setJsMaxScripts(e.target.value.replace(/\D/g, "").slice(0, 3))}
+                disabled={busy}
+                className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-2 text-sm font-mono outline-none focus:border-accent/60"
+                placeholder="8"
+                title="How many <script src> bundles to fetch (1 – 32)"
+              />
+            </div>
+          )}
+          {selectedKind === "takeover" && (
+            <div className="flex-1 min-w-[280px]">
+              <label className="text-[11px] text-muted uppercase tracking-wider">
+                Names (optional — empty reuses latest subdomain job)
+              </label>
+              <input
+                value={takeoverNames}
+                onChange={(e) => setTakeoverNames(e.target.value)}
+                disabled={busy}
+                className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-2 text-sm font-mono outline-none focus:border-accent/60"
+                placeholder="staging.example.com, dev.example.com"
+              />
+            </div>
           )}
           <button
             type="button"
@@ -594,11 +838,11 @@ export default function ReconPage() {
           </button>
         </div>
         <p className="text-[11px] text-muted mt-3">
-          DNS &amp; Subdomain use a resolvable name. Port scan: single host/IP, profiles for full DB
-          coverage. HTTP probe and security headers are real HTTPS fetches (TLS verified); check{" "}
-          <span className="text-fg/80">HTTPS only</span> to skip any http:// retry.{" "}
-          <span className="text-fg/80">TLS cert</span> is a direct TLS handshake. CVE:{" "}
-          <span className="font-mono">nginx:1.25.3</span> or full CPE. Web fuzz: http(s) URL or host.
+          Pick a job from the dropdown — the hint below it explains exactly what each one does.{" "}
+          <span className="text-fg/80">HTTPS only</span> skips http:// fallback for httprobe/headers/cookie audit.
+          New: <span className="text-fg/80">takeover</span> reuses your last subdomain job by default,{" "}
+          <span className="text-fg/80">robots_sitemap</span> + <span className="text-fg/80">js_endpoints</span> +{" "}
+          <span className="text-fg/80">wayback</span> all emit paths you can feed straight into webfuzz.
         </p>
       </div>
 
@@ -613,8 +857,26 @@ export default function ReconPage() {
         />
       )}
 
+      <ToolboxCard
+        targets={Object.entries(targetById).map(([id, value]) => ({ id, value }))}
+        currentTargetValue={target}
+        onCpeFill={(c) => {
+          setCpe(c);
+          setSelectedKind("cve");
+          setInfo(`Loaded CPE '${c}' into the CVE form. Click Run job to query NVD.`);
+        }}
+      />
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <FindingsCard findings={findings} watchJobId={watchJobId} />
+        <FindingsCard
+          findings={findings}
+          watchJobId={watchJobId}
+          onCpeFill={(c) => {
+            setCpe(c);
+            setSelectedKind("cve");
+            setInfo(`Loaded CPE '${c}' into the CVE form. Click Run job to query NVD.`);
+          }}
+        />
         <JobsCard
           jobs={jobs}
           targetById={targetById}
@@ -736,12 +998,39 @@ function WatchJobCard({
   );
 }
 
+function _cpeFromFinding(f: ReconFinding): string | null {
+  // The fingerprint service stashes signals like "nginx/1.25.3" into evidence.signals
+  // and stack_fingerprint also writes evidence.tech = [{name, version}]. We try
+  // both shapes here so this works for any future fingerprint enhancement.
+  const ev = (f.evidence_json || {}) as Record<string, unknown>;
+  const tech = ev.tech as Array<{ name?: string; version?: string }> | undefined;
+  if (Array.isArray(tech)) {
+    const hit = tech.find((t) => t && t.name && t.version);
+    if (hit && hit.name && hit.version) {
+      return `${hit.name.toLowerCase()}:${hit.version}`;
+    }
+  }
+  const signals = ev.signals as string[] | undefined;
+  if (Array.isArray(signals)) {
+    for (const s of signals) {
+      const m = /^([a-zA-Z0-9_+.\-]+)\/([0-9][\w.\-]*)$/.exec((s || "").trim());
+      if (m) return `${m[1].toLowerCase()}:${m[2]}`;
+    }
+  }
+  // Try parsing the title for a "<product>/<ver>" hint as a last resort
+  const m = /([a-zA-Z][\w+.\-]+)\/([0-9][\w.\-]*)/.exec(f.title || "");
+  if (m) return `${m[1].toLowerCase()}:${m[2]}`;
+  return null;
+}
+
 function FindingsCard({
   findings,
-  watchJobId
+  watchJobId,
+  onCpeFill
 }: {
   findings: ReconFinding[];
   watchJobId: string | null;
+  onCpeFill?: (cpe: string) => void;
 }) {
   const [scope, setScope] = useState<"all" | "watch">(watchJobId ? "watch" : "all");
   useEffect(() => {
@@ -785,24 +1074,38 @@ function FindingsCard({
         </p>
       ) : (
         <ul className="space-y-2 text-sm max-h-80 overflow-auto pr-1">
-          {list.map((f, i) => (
-            <motion.li
-              key={f.id}
-              initial={{ opacity: 0, x: -6 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ delay: Math.min(i, 12) * 0.02 }}
-              className="rounded-md border border-border/50 px-3 py-2 hover:border-accent/50"
-            >
-              <div className="flex items-center gap-2">
-                <span className={`h-2 w-2 rounded-full ${sevDot(f.severity)}`} />
-                <span className="truncate">{f.title}</span>
-                <span className="ml-auto text-[11px] text-muted">{f.severity}</span>
-              </div>
-              {f.description && (
-                <div className="text-[11px] text-muted mt-0.5 line-clamp-2">{f.description}</div>
-              )}
-            </motion.li>
-          ))}
+          {list.map((f, i) => {
+            const cpe = onCpeFill ? _cpeFromFinding(f) : null;
+            return (
+              <motion.li
+                key={f.id}
+                initial={{ opacity: 0, x: -6 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: Math.min(i, 12) * 0.02 }}
+                className="rounded-md border border-border/50 px-3 py-2 hover:border-accent/50"
+              >
+                <div className="flex items-center gap-2">
+                  <span className={`h-2 w-2 rounded-full ${sevDot(f.severity)}`} />
+                  <span className="truncate">{f.title}</span>
+                  <span className="ml-auto text-[11px] text-muted">{f.severity}</span>
+                </div>
+                {f.description && (
+                  <div className="text-[11px] text-muted mt-0.5 line-clamp-2">{f.description}</div>
+                )}
+                {cpe && onCpeFill && (
+                  <button
+                    type="button"
+                    onClick={() => onCpeFill(cpe)}
+                    className="mt-1 text-[11px] inline-flex items-center gap-1 px-2 py-0.5 rounded-md border border-accent/40 text-accent hover:bg-accent/15"
+                    title={`Run a CVE lookup for ${cpe}`}
+                  >
+                    <Search className="h-3 w-3" />
+                    Lookup CVEs ({cpe})
+                  </button>
+                )}
+              </motion.li>
+            );
+          })}
         </ul>
       )}
     </div>
@@ -923,6 +1226,518 @@ function JobsCard({
           })}
         </ul>
       )}
+    </div>
+  );
+}
+
+// --- Toolbox: Export / Diff / Schedule / Asset graph ----------------------- //
+
+const SCHEDULE_KINDS: { value: JobKind; label: string }[] = [
+  { value: "subdomain", label: "Subdomain enum" },
+  { value: "httprobe", label: "HTTP(S) live probe" },
+  { value: "http_headers", label: "Security headers" },
+  { value: "tls_audit", label: "TLS deep audit" },
+  { value: "wayback", label: "Wayback URLs" },
+  { value: "robots_sitemap", label: "robots.txt + sitemap" },
+  { value: "js_endpoints", label: "JS endpoints" },
+  { value: "takeover", label: "Subdomain takeover" }
+];
+
+function ToolboxCard({
+  targets,
+  currentTargetValue,
+  onCpeFill
+}: {
+  targets: { id: string; value: string }[];
+  currentTargetValue: string;
+  onCpeFill?: (cpe: string) => void;
+}) {
+  const [tab, setTab] = useState<"export" | "diff" | "schedule" | "graph">("export");
+  void currentTargetValue;
+  void onCpeFill;
+  return (
+    <div className="glass rounded-xl p-4">
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
+        <div className="text-sm font-semibold">Recon toolbox</div>
+        <div className="ml-auto inline-flex rounded-md border border-border/60 overflow-hidden text-[11px]">
+          <button
+            type="button"
+            onClick={() => setTab("export")}
+            className={`px-2 py-0.5 inline-flex items-center gap-1 ${tab === "export" ? "bg-accent/15 text-accent" : "text-muted hover:text-fg"}`}
+          >
+            <Download className="h-3 w-3" /> Export
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("diff")}
+            className={`px-2 py-0.5 inline-flex items-center gap-1 ${tab === "diff" ? "bg-accent/15 text-accent" : "text-muted hover:text-fg"}`}
+          >
+            <GitCompareArrows className="h-3 w-3" /> Diff runs
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("schedule")}
+            className={`px-2 py-0.5 inline-flex items-center gap-1 ${tab === "schedule" ? "bg-accent/15 text-accent" : "text-muted hover:text-fg"}`}
+          >
+            <Calendar className="h-3 w-3" /> Schedules
+          </button>
+          <button
+            type="button"
+            onClick={() => setTab("graph")}
+            className={`px-2 py-0.5 inline-flex items-center gap-1 ${tab === "graph" ? "bg-accent/15 text-accent" : "text-muted hover:text-fg"}`}
+          >
+            <Network className="h-3 w-3" /> Asset graph
+          </button>
+        </div>
+      </div>
+      {tab === "export" && <ExportPanel targets={targets} />}
+      {tab === "diff" && <DiffPanel targets={targets} />}
+      {tab === "schedule" && <SchedulePanel targets={targets} />}
+      {tab === "graph" && <GraphPanel targets={targets} />}
+    </div>
+  );
+}
+
+function ExportPanel({ targets }: { targets: { id: string; value: string }[] }) {
+  const [targetId, setTargetId] = useState<string>("");
+  const [severity, setSeverity] = useState<string>("");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const trigger = async (fmt: "json" | "csv" | "burp" | "nessus") => {
+    setBusy(fmt);
+    setErr(null);
+    try {
+      const url = new URL("/api/v1/recon/export", window.location.origin);
+      url.searchParams.set("fmt", fmt);
+      if (targetId) url.searchParams.set("target_id", targetId);
+      if (severity) url.searchParams.set("severity", severity);
+      const token = (await import("@/lib/auth")).getAccessToken();
+      const res = await fetch(url.toString(), {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        credentials: "include"
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const dl = document.createElement("a");
+      dl.href = URL.createObjectURL(blob);
+      dl.download =
+        fmt === "csv"
+          ? "sentinelops-findings.csv"
+          : fmt === "burp"
+            ? "sentinelops-burp-scope.json"
+            : fmt === "nessus"
+              ? "sentinelops-findings.nessus"
+              : "sentinelops-findings.json";
+      document.body.appendChild(dl);
+      dl.click();
+      dl.remove();
+      URL.revokeObjectURL(dl.href);
+    } catch (e) {
+      setErr(`Export failed: ${(e as Error).message}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <div className="space-y-2 text-xs">
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="min-w-[220px] flex-1">
+          <label className="text-[11px] text-muted uppercase tracking-wider">Target (optional)</label>
+          <select
+            value={targetId}
+            onChange={(e) => setTargetId(e.target.value)}
+            className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-1.5 text-sm outline-none"
+          >
+            <option value="">All my targets</option>
+            {targets.map((t) => (
+              <option key={t.id} value={t.id}>{t.value}</option>
+            ))}
+          </select>
+        </div>
+        <div className="min-w-[140px]">
+          <label className="text-[11px] text-muted uppercase tracking-wider">Severity</label>
+          <select
+            value={severity}
+            onChange={(e) => setSeverity(e.target.value)}
+            className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-1.5 text-sm outline-none"
+          >
+            <option value="">Any</option>
+            <option value="info">info</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+            <option value="critical">critical</option>
+          </select>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {(["json", "csv", "burp", "nessus"] as const).map((f) => (
+          <button
+            key={f}
+            type="button"
+            disabled={busy !== null}
+            onClick={() => void trigger(f)}
+            className="px-3 py-1.5 rounded-md bg-accent/15 text-accent border border-accent/40 hover:bg-accent/25 inline-flex items-center gap-1.5 disabled:opacity-60"
+          >
+            {busy === f ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
+            {f === "burp" ? "Burp Scope JSON" : f === "nessus" ? "Nessus XML" : f.toUpperCase()}
+          </button>
+        ))}
+      </div>
+      {err && <div className="text-danger text-[11px]">{err}</div>}
+      <p className="text-[11px] text-muted leading-snug">
+        JSON / CSV are flat finding lists. <span className="text-fg/80">Burp Scope JSON</span> imports
+        directly via Project options → Target → Scope → Load. <span className="text-fg/80">Nessus XML</span> is
+        a NessusClientData_v2 stub that DefectDojo / Faraday / Nexpose accept.
+      </p>
+    </div>
+  );
+}
+
+function DiffPanel({ targets }: { targets: { id: string; value: string }[] }) {
+  const [pickedTargetId, setTargetId] = useState<string>("");
+  const targetId = pickedTargetId || targets[0]?.id || "";
+  const [kind, setKind] = useState<string>("subdomain");
+  const [result, setResult] = useState<ReconDiffResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const run = async () => {
+    if (!targetId) {
+      setErr("Pick a target.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await api.get<ReconDiffResult>(
+        `/api/v1/recon/diff?target_id=${encodeURIComponent(targetId)}&kind=${encodeURIComponent(kind)}`
+      );
+      setResult(r);
+    } catch (e) {
+      const a = e as ApiError;
+      setErr(a.detail || "Failed to compute diff. Need at least one completed job of this kind.");
+      setResult(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="space-y-2 text-xs">
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="min-w-[220px] flex-1">
+          <label className="text-[11px] text-muted uppercase tracking-wider">Target</label>
+          <select
+            value={targetId}
+            onChange={(e) => setTargetId(e.target.value)}
+            className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-1.5 text-sm outline-none"
+          >
+            {targets.map((t) => (
+              <option key={t.id} value={t.id}>{t.value}</option>
+            ))}
+          </select>
+        </div>
+        <div className="min-w-[180px]">
+          <label className="text-[11px] text-muted uppercase tracking-wider">Job kind</label>
+          <select
+            value={kind}
+            onChange={(e) => setKind(e.target.value)}
+            className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-1.5 text-sm outline-none"
+          >
+            <option value="subdomain">subdomain</option>
+            <option value="wayback">wayback</option>
+            <option value="robots_sitemap">robots_sitemap</option>
+            <option value="js_endpoints">js_endpoints</option>
+          </select>
+        </div>
+        <button
+          type="button"
+          onClick={() => void run()}
+          disabled={busy}
+          className="px-3 py-1.5 rounded-md bg-accent/15 text-accent border border-accent/40 hover:bg-accent/25 inline-flex items-center gap-1.5 disabled:opacity-60"
+        >
+          {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <GitCompareArrows className="h-3 w-3" />}
+          Compute diff
+        </button>
+      </div>
+      {err && <div className="text-danger text-[11px]">{err}</div>}
+      {result && (
+        <div className="text-[11px] space-y-1">
+          <div className="text-muted">
+            <span className="text-ok">{result.new_count} new</span> ·{" "}
+            <span className="text-danger">{result.removed_count} removed</span> ·{" "}
+            <span>{result.stable_count} stable</span> ·{" "}
+            base <span className="font-mono">{result.base_job_id?.slice(0, 8) || "—"}</span>{" "}
+            head <span className="font-mono">{result.head_job_id.slice(0, 8)}</span>
+          </div>
+          <ul className="max-h-56 overflow-auto pr-1 space-y-0.5">
+            {result.entries
+              .filter((e) => e.state !== "stable")
+              .map((e) => (
+                <li
+                  key={`${e.state}:${e.name}`}
+                  className={`font-mono ${e.state === "new" ? "text-ok" : "text-danger"}`}
+                >
+                  {e.state === "new" ? "+ " : "- "}
+                  {e.name}
+                </li>
+              ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SchedulePanel({ targets }: { targets: { id: string; value: string }[] }) {
+  const [items, setItems] = useState<ReconSchedule[]>([]);
+  const [pickedTargetId, setTargetId] = useState<string>("");
+  const targetId = pickedTargetId || targets[0]?.id || "";
+  const [kind, setKind] = useState<JobKind>("subdomain");
+  const [intervalMin, setIntervalMin] = useState<string>("60");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const reload = useCallback(async () => {
+    try {
+      const r = await api.get<ReconSchedule[]>("/api/v1/recon/schedules");
+      setItems(r);
+      setErr(null);
+    } catch (e) {
+      setErr((e as ApiError).detail || "Failed to load schedules.");
+    }
+  }, []);
+  useEffect(() => {
+    const t = runDeferred(() => void reload());
+    return () => clearTimeout(t);
+  }, [reload]);
+  const create = async () => {
+    if (!targetId) {
+      setErr("Pick a target.");
+      return;
+    }
+    const min = Number.parseInt(intervalMin, 10);
+    if (!Number.isInteger(min) || min < 5 || min > 10080) {
+      setErr("Interval must be 5–10080 minutes (5 minutes to 7 days).");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.post<ReconSchedule>("/api/v1/recon/schedules", {
+        target_id: targetId,
+        kind,
+        interval_minutes: min,
+        enabled: true,
+        params: {}
+      });
+      setErr(null);
+      await reload();
+    } catch (e) {
+      setErr((e as ApiError).detail || "Failed to create schedule.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  const toggle = async (id: string, enabled: boolean) => {
+    try {
+      await api.patch<ReconSchedule>(`/api/v1/recon/schedules/${id}`, { enabled });
+      await reload();
+    } catch (e) {
+      setErr((e as ApiError).detail || "Failed to update schedule.");
+    }
+  };
+  const remove = async (id: string) => {
+    try {
+      await api.del<{ ok: boolean }>(`/api/v1/recon/schedules/${id}`);
+      await reload();
+    } catch (e) {
+      setErr((e as ApiError).detail || "Failed to delete schedule.");
+    }
+  };
+  return (
+    <div className="space-y-2 text-xs">
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="min-w-[220px] flex-1">
+          <label className="text-[11px] text-muted uppercase tracking-wider">Target</label>
+          <select
+            value={targetId}
+            onChange={(e) => setTargetId(e.target.value)}
+            className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-1.5 text-sm outline-none"
+          >
+            {targets.map((t) => (
+              <option key={t.id} value={t.id}>{t.value}</option>
+            ))}
+          </select>
+        </div>
+        <div className="min-w-[180px]">
+          <label className="text-[11px] text-muted uppercase tracking-wider">Job kind</label>
+          <select
+            value={kind}
+            onChange={(e) => setKind(e.target.value as JobKind)}
+            className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-1.5 text-sm outline-none"
+          >
+            {SCHEDULE_KINDS.map((k) => (
+              <option key={k.value} value={k.value}>{k.label}</option>
+            ))}
+          </select>
+        </div>
+        <div className="min-w-[100px]">
+          <label className="text-[11px] text-muted uppercase tracking-wider">Every (min)</label>
+          <input
+            value={intervalMin}
+            onChange={(e) => setIntervalMin(e.target.value.replace(/\D/g, "").slice(0, 5))}
+            className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-1.5 text-sm font-mono outline-none"
+            placeholder="60"
+            title="5 minutes – 7 days (10080)"
+          />
+        </div>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void create()}
+          className="px-3 py-1.5 rounded-md bg-accent/15 text-accent border border-accent/40 hover:bg-accent/25 inline-flex items-center gap-1.5 disabled:opacity-60"
+        >
+          {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Calendar className="h-3 w-3" />}
+          Add schedule
+        </button>
+      </div>
+      {err && <div className="text-danger text-[11px]">{err}</div>}
+      {items.length === 0 ? (
+        <p className="text-[11px] text-muted">
+          No recurring scans yet. Add one above — Celery beat will dispatch it every <span className="text-fg/80">interval</span> minutes.
+        </p>
+      ) : (
+        <ul className="space-y-1 max-h-56 overflow-auto pr-1">
+          {items.map((s) => {
+            const target = targets.find((t) => t.id === s.target_id);
+            return (
+              <li key={s.id} className="rounded-md border border-border/50 px-2 py-1 flex items-center gap-2 flex-wrap">
+                <span className={`h-2 w-2 rounded-full ${s.enabled ? "bg-ok" : "bg-muted"}`} />
+                <span className="font-mono text-[11px]">{target?.value || s.target_id.slice(0, 8)}</span>
+                <span className="text-[11px]">{s.kind}</span>
+                <span className="text-[11px] text-muted">every {s.interval_minutes}m</span>
+                {s.last_run_at && (
+                  <span className="text-[11px] text-muted">last {new Date(s.last_run_at).toLocaleString()}</span>
+                )}
+                <div className="ml-auto inline-flex gap-1">
+                  <button
+                    type="button"
+                    onClick={() => void toggle(s.id, !s.enabled)}
+                    className="text-[11px] px-2 py-0.5 rounded-md border border-border/60 hover:border-accent/60"
+                  >
+                    {s.enabled ? "Pause" : "Resume"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void remove(s.id)}
+                    className="text-[11px] px-2 py-0.5 rounded-md border border-danger/40 text-danger hover:bg-danger/10"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function GraphPanel({ targets }: { targets: { id: string; value: string }[] }) {
+  const [pickedTargetId, setTargetId] = useState<string>("");
+  const targetId = pickedTargetId || targets[0]?.id || "";
+  const [data, setData] = useState<ReconGraphResult | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const run = async () => {
+    if (!targetId) {
+      setErr("Pick a target.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await api.get<ReconGraphResult>(
+        `/api/v1/recon/graph?target_id=${encodeURIComponent(targetId)}`
+      );
+      setData(r);
+    } catch (e) {
+      setErr((e as ApiError).detail || "Failed to fetch asset graph.");
+      setData(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const counts = useMemo(() => {
+    if (!data) return null;
+    const c: Record<string, number> = {};
+    data.nodes.forEach((n) => {
+      c[n.type] = (c[n.type] || 0) + 1;
+    });
+    return c;
+  }, [data]);
+  return (
+    <div className="space-y-2 text-xs">
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="min-w-[220px] flex-1">
+          <label className="text-[11px] text-muted uppercase tracking-wider">Target</label>
+          <select
+            value={targetId}
+            onChange={(e) => setTargetId(e.target.value)}
+            className="mt-1 w-full bg-panel/60 border border-border/60 rounded-md px-3 py-1.5 text-sm outline-none"
+          >
+            {targets.map((t) => (
+              <option key={t.id} value={t.id}>{t.value}</option>
+            ))}
+          </select>
+        </div>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => void run()}
+          className="px-3 py-1.5 rounded-md bg-accent/15 text-accent border border-accent/40 hover:bg-accent/25 inline-flex items-center gap-1.5 disabled:opacity-60"
+        >
+          {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Network className="h-3 w-3" />}
+          Build graph
+        </button>
+      </div>
+      {err && <div className="text-danger text-[11px]">{err}</div>}
+      {data && counts && (
+        <div className="space-y-1">
+          <div className="text-[11px] text-muted">
+            {data.nodes.length} nodes · {data.edges.length} edges ·{" "}
+            {Object.entries(counts)
+              .map(([k, v]) => `${k}:${v}`)
+              .join(" · ")}
+          </div>
+          <details className="text-[11px]">
+            <summary className="cursor-pointer hover:text-accent">Edges</summary>
+            <ul className="mt-1 max-h-40 overflow-auto pr-1 space-y-0.5">
+              {data.edges.slice(0, 200).map((e, i) => (
+                <li key={i} className="font-mono">
+                  <span className="text-muted">{e.source}</span>
+                  <span className="text-accent"> {"-["}{e.relation}{"]->"} </span>
+                  <span>{e.target}</span>
+                </li>
+              ))}
+              {data.edges.length > 200 && (
+                <li className="text-muted">… and {data.edges.length - 200} more</li>
+              )}
+            </ul>
+          </details>
+          <details className="text-[11px]">
+            <summary className="cursor-pointer hover:text-accent">Raw JSON</summary>
+            <pre className="mt-1 max-h-48 overflow-auto bg-bg/40 border border-border/40 rounded-md p-2 font-mono text-[11px]">
+              {JSON.stringify(data, null, 2)}
+            </pre>
+          </details>
+        </div>
+      )}
+      <p className="text-[11px] text-muted leading-snug">
+        Builds a node/edge view from your most-recent done jobs:{" "}
+        <span className="font-mono">target → subdomain → ip → service</span>, plus{" "}
+        <span className="font-mono">target → cve</span> for NVD findings and{" "}
+        <span className="font-mono">target → takeover</span> for any vulnerable subdomain matches.
+      </p>
     </div>
   );
 }

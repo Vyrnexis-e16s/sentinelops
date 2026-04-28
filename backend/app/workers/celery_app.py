@@ -51,6 +51,12 @@ celery_app.conf.update(
             "task": "recon.rescue",
             "schedule": crontab(minute="*"),  # every minute
         },
+        # Per-target recurring scans. Every minute, fire any schedule whose
+        # ``last_run_at + interval_minutes`` has elapsed.
+        "recon-schedule-tick": {
+            "task": "recon.schedule_tick",
+            "schedule": crontab(minute="*"),
+        },
     },
 )
 

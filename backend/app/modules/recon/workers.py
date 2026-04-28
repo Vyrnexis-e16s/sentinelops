@@ -17,11 +17,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import dispose_engine, get_session_factory
 from app.core.logging import get_logger
 from app.core.redis import init_redis
-from app.modules.recon.models import Finding, ReconJob
+from app.modules.recon.models import Finding, ReconJob, ReconSchedule, Target
+from app.modules.recon.services.cookie_audit import audit_cookies
 from app.modules.recon.services.cve import is_bare_fqdn_not_cpe, query_cves
 from app.modules.recon.services.ct_search import fetch_crt_sh_entries
+from app.modules.recon.services.dns_axfr import probe_axfr
+from app.modules.recon.services.js_endpoints import extract_endpoints
 from app.modules.recon.services.reverse_dns import ptr_for_ip_async
+from app.modules.recon.services.robots_sitemap import collect as collect_robots_sitemap
 from app.modules.recon.services.stack_fingerprint import fingerprint_url
+from app.modules.recon.services.takeover import detect_takeovers
+from app.modules.recon.services.tls_audit import deep_audit as tls_deep_audit
+from app.modules.recon.services.wayback import fetch_wayback_urls
 from app.modules.recon.services.wellknown_fetch import probe_well_known
 from app.modules.recon.services.dns_recon import collect_records as collect_dns
 from app.modules.recon.services.httprobe import probe as httprobe_urls
@@ -731,6 +738,381 @@ async def _run_ptr(job_id: str, target: str, params: dict[str, Any]) -> dict[str
     return {"ok": bool(info.get("ok"))}
 
 
+async def _run_takeover(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Subdomain takeover scanner.
+
+    `params.names` is a list of candidate subdomains. If empty, we look up
+    the most recent ``done`` subdomain job for this target and reuse those
+    hits — so an analyst can run ``takeover`` immediately after a subdomain
+    job without re-typing the wordlist.
+    """
+    await dispose_engine()
+    factory = get_session_factory()
+    raw_names = params.get("names")
+    candidates: list[str] = []
+    if isinstance(raw_names, list):
+        candidates = [str(n).strip() for n in raw_names if str(n).strip()]
+    async with factory() as db:
+        job = await _claim_for_run(db, uuid.UUID(job_id))
+        if job is None:
+            return {"error": "missing_or_already_handled"}
+        if not candidates:
+            stmt = (
+                select(ReconJob)
+                .where(ReconJob.target_id == job.target_id, ReconJob.kind == "subdomain", ReconJob.status == "done")
+                .order_by(ReconJob.finished_at.desc().nullslast())
+                .limit(1)
+            )
+            prev = (await db.execute(stmt)).scalars().first()
+            if prev is not None and isinstance(prev.result_json, dict):
+                hits = prev.result_json.get("hits") or []
+                if isinstance(hits, list):
+                    candidates = [str(h.get("name") or "").strip() for h in hits if isinstance(h, dict)]
+            if not candidates:
+                candidates = [target]
+        try:
+            results = await detect_takeovers(candidates)
+        except Exception as exc:  # noqa: BLE001
+            await _set_status(db, uuid.UUID(job_id), "failed")
+            await db.commit()
+            log.exception("recon.takeover.failed", job_id=job_id, error=str(exc))
+            return {"error": str(exc)}
+
+        finding_rows: list[dict[str, Any]] = []
+        for r in results:
+            klass = r.get("classification", "ok")
+            sev = r.get("severity") or ("high" if klass == "vulnerable" else "info")
+            title_pfx = {
+                "vulnerable": "Subdomain takeover (likely)",
+                "review": "Subdomain points at third-party (review)",
+                "ok": "No takeover marker",
+                "error": "Takeover check error",
+            }.get(klass, klass)
+            finding_rows.append(
+                {
+                    "severity": sev,
+                    "title": f"{title_pfx}: {r.get('name')}" + (f" — {r.get('provider_match')}" if r.get("provider_match") else ""),
+                    "description": " → ".join(r.get("cname_chain") or []) or (r.get("error") or ""),
+                    "evidence": r,
+                }
+            )
+        await _persist_findings(db, uuid.UUID(job_id), finding_rows)
+        job.result_json = {
+            "candidates": candidates,
+            "results": results,
+            "vulnerable": [r for r in results if r.get("classification") == "vulnerable"],
+        }
+        await _set_status(db, uuid.UUID(job_id), "done")
+        await db.commit()
+    await publish(CHANNEL_RECON, {"job_id": job_id, "kind": "takeover", "count": len(finding_rows)})
+    return {"checked": len(results)}
+
+
+async def _run_axfr(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    await dispose_engine()
+    factory = get_session_factory()
+    async with factory() as db:
+        job = await _claim_for_run(db, uuid.UUID(job_id))
+        if job is None:
+            return {"error": "missing_or_already_handled"}
+        try:
+            res = await probe_axfr(target)
+        except Exception as exc:  # noqa: BLE001
+            await _set_status(db, uuid.UUID(job_id), "failed")
+            await db.commit()
+            log.exception("recon.axfr.failed", job_id=job_id, error=str(exc))
+            return {"error": str(exc)}
+
+        findings: list[dict[str, Any]] = []
+        if res.get("any_leak"):
+            findings.append(
+                {
+                    "severity": "high",
+                    "title": f"AXFR allowed on {target} — zone transfer leaks records",
+                    "description": "One or more authoritative NS returned a full zone for an unauthenticated client. This must be locked down at the NS level.",
+                    "evidence": res,
+                }
+            )
+        else:
+            findings.append(
+                {
+                    "severity": "info",
+                    "title": f"AXFR refused for {target}",
+                    "description": f"Tested {len(res.get('nameservers') or [])} NS — all refused or timed out. (Expected.)",
+                    "evidence": res,
+                }
+            )
+        await _persist_findings(db, uuid.UUID(job_id), findings)
+        job.result_json = res
+        await _set_status(db, uuid.UUID(job_id), "done")
+        await db.commit()
+    await publish(CHANNEL_RECON, {"job_id": job_id, "kind": "axfr", "count": len(findings)})
+    return {"any_leak": bool(res.get("any_leak"))}
+
+
+async def _run_robots_sitemap(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    await dispose_engine()
+    factory = get_session_factory()
+    try:
+        max_paths = max(10, min(int(params.get("max_paths", 250)), 2000))
+    except (TypeError, ValueError):
+        max_paths = 250
+    async with factory() as db:
+        job = await _claim_for_run(db, uuid.UUID(job_id))
+        if job is None:
+            return {"error": "missing_or_already_handled"}
+        try:
+            res = await collect_robots_sitemap(target, max_paths=max_paths)
+        except Exception as exc:  # noqa: BLE001
+            await _set_status(db, uuid.UUID(job_id), "failed")
+            await db.commit()
+            log.exception("recon.robots.failed", job_id=job_id, error=str(exc))
+            return {"error": str(exc)}
+
+        disallow = res.get("disallow") or []
+        sm = res.get("sitemap_urls") or []
+        sev = "low" if (disallow or sm) else "info"
+        findings = [
+            {
+                "severity": sev,
+                "title": f"robots.txt + sitemap on {target} — {len(disallow)} disallow, {len(sm)} sitemap URL(s)",
+                "description": (
+                    f"robots.txt status {res.get('robots_status')}; "
+                    f"{len(res.get('sitemaps_visited') or [])} sitemap(s) visited."
+                ),
+                "evidence": res,
+            }
+        ]
+        await _persist_findings(db, uuid.UUID(job_id), findings)
+        job.result_json = res
+        await _set_status(db, uuid.UUID(job_id), "done")
+        await db.commit()
+    await publish(CHANNEL_RECON, {"job_id": job_id, "kind": "robots_sitemap", "count": len(findings)})
+    return {"disallow": len(disallow), "sitemap": len(sm)}
+
+
+async def _run_js_endpoints(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    await dispose_engine()
+    factory = get_session_factory()
+    try:
+        max_scripts = max(1, min(int(params.get("max_scripts", 8)), 32))
+    except (TypeError, ValueError):
+        max_scripts = 8
+    async with factory() as db:
+        job = await _claim_for_run(db, uuid.UUID(job_id))
+        if job is None:
+            return {"error": "missing_or_already_handled"}
+        try:
+            res = await extract_endpoints(target, max_scripts=max_scripts)
+        except Exception as exc:  # noqa: BLE001
+            await _set_status(db, uuid.UUID(job_id), "failed")
+            await db.commit()
+            log.exception("recon.js_endpoints.failed", job_id=job_id, error=str(exc))
+            return {"error": str(exc)}
+
+        if not res.get("ok"):
+            findings = [
+                {
+                    "severity": "medium",
+                    "title": f"JS endpoint extractor failed for {target}",
+                    "description": str(res.get("error", "")),
+                    "evidence": res,
+                }
+            ]
+        else:
+            paths = res.get("paths") or []
+            sev = "medium" if len(paths) >= 5 else "low" if paths else "info"
+            findings = [
+                {
+                    "severity": sev,
+                    "title": f"Discovered {len(paths)} API path(s) on {target}",
+                    "description": ", ".join(paths[:6]) + ("…" if len(paths) > 6 else ""),
+                    "evidence": res,
+                }
+            ]
+        await _persist_findings(db, uuid.UUID(job_id), findings)
+        job.result_json = res
+        await _set_status(db, uuid.UUID(job_id), "done")
+        await db.commit()
+    await publish(CHANNEL_RECON, {"job_id": job_id, "kind": "js_endpoints", "count": len(findings)})
+    return {"paths": len((res or {}).get("paths") or [])}
+
+
+async def _run_cookie_audit(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    await dispose_engine()
+    factory = get_session_factory()
+    https_only = bool(params.get("https_only", False))
+    async with factory() as db:
+        job = await _claim_for_run(db, uuid.UUID(job_id))
+        if job is None:
+            return {"error": "missing_or_already_handled"}
+        try:
+            res = await audit_cookies(target, https_only=https_only)
+        except Exception as exc:  # noqa: BLE001
+            await _set_status(db, uuid.UUID(job_id), "failed")
+            await db.commit()
+            log.exception("recon.cookie_audit.failed", job_id=job_id, error=str(exc))
+            return {"error": str(exc)}
+
+        if not res.get("ok"):
+            findings = [
+                {
+                    "severity": "low",
+                    "title": f"Cookie audit on {target} — no response",
+                    "description": str(res.get("error", "")),
+                    "evidence": res,
+                }
+            ]
+        else:
+            cookies = res.get("cookies") or []
+            if not cookies:
+                findings = [
+                    {
+                        "severity": "info",
+                        "title": f"No cookies set by {res.get('url')}",
+                        "description": "0 Set-Cookie headers in response chain.",
+                        "evidence": res,
+                    }
+                ]
+            else:
+                rolled: list[dict[str, Any]] = []
+                for c in cookies:
+                    issues = c.get("issues") or []
+                    if not issues:
+                        continue
+                    rolled.append(
+                        {
+                            "severity": c.get("severity", "low"),
+                            "title": f"Cookie '{c.get('name')}' missing: {', '.join(issues)[:160]}",
+                            "description": f"path={c.get('path')} samesite={c.get('samesite')} secure={c.get('secure')} httponly={c.get('httponly')}",
+                            "evidence": c,
+                        }
+                    )
+                if not rolled:
+                    rolled.append(
+                        {
+                            "severity": "info",
+                            "title": f"Cookies on {res.get('url')} look healthy",
+                            "description": f"{len(cookies)} cookie(s); none missing Secure/HttpOnly/SameSite.",
+                            "evidence": res,
+                        }
+                    )
+                findings = rolled
+        await _persist_findings(db, uuid.UUID(job_id), findings)
+        job.result_json = res
+        await _set_status(db, uuid.UUID(job_id), "done")
+        await db.commit()
+    await publish(CHANNEL_RECON, {"job_id": job_id, "kind": "cookie_audit", "count": len(findings)})
+    return {"cookies": len(res.get("cookies") or [])}
+
+
+async def _run_tls_audit(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    await dispose_engine()
+    factory = get_session_factory()
+    h, tport = _host_and_port(target)
+    raw = params.get("port", tport)
+    if raw is None:
+        raw = 443
+    try:
+        p = int(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        p = 443
+    if p < 1 or p > 65535:
+        p = 443
+    async with factory() as db:
+        job = await _claim_for_run(db, uuid.UUID(job_id))
+        if job is None:
+            return {"error": "missing_or_already_handled"}
+        if not h:
+            await _set_status(db, uuid.UUID(job_id), "failed")
+            await db.commit()
+            return {"error": "Could not parse hostname for TLS audit"}
+        try:
+            res = await tls_deep_audit(h, p)
+        except Exception as exc:  # noqa: BLE001
+            await _set_status(db, uuid.UUID(job_id), "failed")
+            await db.commit()
+            log.exception("recon.tls_audit.failed", job_id=job_id, error=str(exc))
+            return {"error": str(exc)}
+
+        if not res.get("ok"):
+            findings = [
+                {
+                    "severity": "high",
+                    "title": f"TLS audit failed for {h}:{p}",
+                    "description": str(res.get("error", "")),
+                    "evidence": res,
+                }
+            ]
+        else:
+            grade = res.get("grade", "?")
+            issues = res.get("issues") or []
+            sev = {"A": "info", "B": "low", "C": "medium", "F": "high"}.get(grade, "low")
+            findings = [
+                {
+                    "severity": sev,
+                    "title": f"TLS audit {h}:{p} — grade {grade}" + (f" ({len(issues)} issue{'s' if len(issues) != 1 else ''})" if issues else ""),
+                    "description": "; ".join(issues)[:480] if issues else "No issues.",
+                    "evidence": res,
+                }
+            ]
+        await _persist_findings(db, uuid.UUID(job_id), findings)
+        job.result_json = res
+        await _set_status(db, uuid.UUID(job_id), "done")
+        await db.commit()
+    await publish(CHANNEL_RECON, {"job_id": job_id, "kind": "tls_audit", "count": len(findings)})
+    return {"grade": res.get("grade")}
+
+
+async def _run_wayback(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    await dispose_engine()
+    factory = get_session_factory()
+    try:
+        limit = max(10, min(int(params.get("limit", 200)), 5000))
+    except (TypeError, ValueError):
+        limit = 200
+    only_2xx = bool(params.get("only_2xx", False))
+    async with factory() as db:
+        job = await _claim_for_run(db, uuid.UUID(job_id))
+        if job is None:
+            return {"error": "missing_or_already_handled"}
+        try:
+            res = await fetch_wayback_urls(target, limit=limit, only_status_2xx=only_2xx)
+        except Exception as exc:  # noqa: BLE001
+            await _set_status(db, uuid.UUID(job_id), "failed")
+            await db.commit()
+            log.exception("recon.wayback.failed", job_id=job_id, error=str(exc))
+            return {"error": str(exc)}
+
+        urls = res.get("urls") or []
+        if not res.get("ok"):
+            findings = [
+                {
+                    "severity": "low",
+                    "title": f"Wayback CDX query failed for {target}",
+                    "description": str(res.get("error", "")),
+                    "evidence": res,
+                }
+            ]
+        else:
+            sev = "low" if len(urls) >= 50 else "info"
+            findings = [
+                {
+                    "severity": sev,
+                    "title": f"Wayback historical URLs for {target} — {len(urls)} unique",
+                    "description": ", ".join(u.get("path", "") for u in urls[:5])[:180]
+                    + ("…" if len(urls) > 5 else ""),
+                    "evidence": res,
+                }
+            ]
+        await _persist_findings(db, uuid.UUID(job_id), findings)
+        job.result_json = res
+        await _set_status(db, uuid.UUID(job_id), "done")
+        await db.commit()
+    await publish(CHANNEL_RECON, {"job_id": job_id, "kind": "wayback", "count": len(findings)})
+    return {"urls": len(urls)}
+
+
 # --------------------------------------------------------------------------- #
 # Celery task wrappers                                                        #
 # --------------------------------------------------------------------------- #
@@ -796,6 +1178,41 @@ def run_ptr_job(job_id: str, target: str, params: dict[str, Any]) -> dict[str, A
     return asyncio.run(_run_ptr(job_id, target, params or {}))
 
 
+@celery_app.task(name="recon.takeover")
+def run_takeover_job(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    return asyncio.run(_run_takeover(job_id, target, params or {}))
+
+
+@celery_app.task(name="recon.axfr")
+def run_axfr_job(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    return asyncio.run(_run_axfr(job_id, target, params or {}))
+
+
+@celery_app.task(name="recon.robots_sitemap")
+def run_robots_sitemap_job(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    return asyncio.run(_run_robots_sitemap(job_id, target, params or {}))
+
+
+@celery_app.task(name="recon.js_endpoints")
+def run_js_endpoints_job(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    return asyncio.run(_run_js_endpoints(job_id, target, params or {}))
+
+
+@celery_app.task(name="recon.cookie_audit")
+def run_cookie_audit_job(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    return asyncio.run(_run_cookie_audit(job_id, target, params or {}))
+
+
+@celery_app.task(name="recon.tls_audit")
+def run_tls_audit_job(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    return asyncio.run(_run_tls_audit(job_id, target, params or {}))
+
+
+@celery_app.task(name="recon.wayback")
+def run_wayback_job(job_id: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    return asyncio.run(_run_wayback(job_id, target, params or {}))
+
+
 @celery_app.task(name="recon.rescue")
 def rescue_orphans() -> dict[str, int]:
     """Periodic + on-demand task: re-dispatch any recon job stuck in 'queued'.
@@ -806,3 +1223,95 @@ def rescue_orphans() -> dict[str, int]:
     from app.modules.recon.rescue import run_rescue_sync  # noqa: WPS433
 
     return run_rescue_sync()
+
+
+# --------------------------------------------------------------------------- #
+# Per-target recurring scan tick                                              #
+# --------------------------------------------------------------------------- #
+
+
+_KIND_TO_TASK_NAME: dict[str, str] = {
+    "subdomain": "recon.subdomain",
+    "port": "recon.port",
+    "cve": "recon.cve",
+    "webfuzz": "recon.webfuzz",
+    "dns": "recon.dns",
+    "httprobe": "recon.httprobe",
+    "http_headers": "recon.http_headers",
+    "tls_cert": "recon.tls_cert",
+    "ct": "recon.ct",
+    "wellknown": "recon.wellknown",
+    "fingerprint": "recon.fingerprint",
+    "ptr": "recon.ptr",
+    "takeover": "recon.takeover",
+    "axfr": "recon.axfr",
+    "robots_sitemap": "recon.robots_sitemap",
+    "js_endpoints": "recon.js_endpoints",
+    "cookie_audit": "recon.cookie_audit",
+    "tls_audit": "recon.tls_audit",
+    "wayback": "recon.wayback",
+}
+
+
+async def _run_schedule_tick() -> dict[str, int]:
+    await dispose_engine()
+    factory = get_session_factory()
+    fired = 0
+    skipped = 0
+    now = datetime.now(tz=timezone.utc)
+    async with factory() as db:
+        rows = (
+            await db.execute(select(ReconSchedule).where(ReconSchedule.enabled == True))  # noqa: E712
+        ).scalars().all()
+        for sch in rows:
+            interval = max(1, int(sch.interval_minutes or 60))
+            last = sch.last_run_at
+            if last is not None and (now - last).total_seconds() < interval * 60:
+                skipped += 1
+                continue
+            target = await db.get(Target, sch.target_id)
+            if target is None:
+                skipped += 1
+                continue
+            new_job = ReconJob(
+                id=uuid.uuid4(),
+                target_id=target.id,
+                kind=sch.kind,
+                status="queued",
+                result_json={"params": sch.params_json or {}, "scheduled_by": str(sch.id)},
+            )
+            db.add(new_job)
+            await db.flush()
+            sch.last_run_at = now
+            sch.last_job_id = new_job.id
+            await db.flush()
+            try:
+                task_name = _KIND_TO_TASK_NAME.get(sch.kind)
+                if task_name:
+                    celery_app.send_task(
+                        task_name,
+                        kwargs={
+                            "job_id": str(new_job.id),
+                            "target": target.value,
+                            "params": sch.params_json or {},
+                        },
+                        queue="recon",
+                    )
+                    fired += 1
+            except Exception as exc:  # noqa: BLE001
+                log.warning("recon.schedule.dispatch_failed", schedule=str(sch.id), error=str(exc))
+                new_job.status = "failed"
+                new_job.finished_at = now
+                new_job.result_json = {
+                    **(new_job.result_json or {}),
+                    "error": "schedule dispatch failed",
+                    "detail": str(exc),
+                }
+        await db.commit()
+    return {"fired": fired, "skipped": skipped}
+
+
+@celery_app.task(name="recon.schedule_tick")
+def schedule_tick() -> dict[str, int]:
+    """Per-minute beat task: enqueue jobs for every schedule whose interval elapsed."""
+    return asyncio.run(_run_schedule_tick())

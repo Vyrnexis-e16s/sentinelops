@@ -66,3 +66,34 @@ class Finding(Base):
     evidence_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=_dict)
 
     job: Mapped[ReconJob] = relationship(back_populates="findings")
+
+
+class ReconSchedule(Base):
+    """Per-target recurring scan.
+
+    The Celery beat ``recon.schedule_tick`` task runs every minute, finds every
+    enabled schedule whose ``last_run_at + interval_minutes`` has passed, and
+    enqueues a fresh job of the configured kind. Status is then exactly the
+    same lifecycle as a manually-created job, so all the existing UIs work.
+    """
+
+    __tablename__ = "recon_schedules"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    target_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("recon_targets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    interval_minutes: Mapped[int] = mapped_column(default=60, nullable=False)
+    enabled: Mapped[bool] = mapped_column(default=True, nullable=False)
+    params_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=_dict)
+    last_run_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    last_job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("recon_jobs.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        nullable=False, default=lambda: datetime.now(tz=timezone.utc)
+    )
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )

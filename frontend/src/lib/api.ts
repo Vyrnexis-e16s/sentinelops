@@ -64,6 +64,8 @@ export const api = {
     request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
   put: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "PUT", body: body ? JSON.stringify(body) : undefined }),
+  patch: <T>(path: string, body?: unknown) =>
+    request<T>(path, { method: "PATCH", body: body ? JSON.stringify(body) : undefined }),
   del: <T>(path: string) => request<T>(path, { method: "DELETE" })
 };
 
@@ -296,7 +298,65 @@ const RECON_KINDS = [
   "ct",
   "wellknown",
   "fingerprint",
-  "ptr"
+  "ptr",
+  "takeover",
+  "axfr",
+  "robots_sitemap",
+  "js_endpoints",
+  "cookie_audit",
+  "tls_audit",
+  "wayback"
 ] as const;
 
 export { RECON_KINDS };
+
+// --- Schedules ---
+export type ReconSchedule = {
+  id: string;
+  target_id: string;
+  kind: string;
+  interval_minutes: number;
+  enabled: boolean;
+  params_json: Record<string, unknown>;
+  last_run_at: string | null;
+  last_job_id: string | null;
+  created_at: string;
+};
+
+export type ReconScheduleCreate = {
+  target_id: string;
+  kind: string;
+  interval_minutes: number;
+  enabled?: boolean;
+  params?: Record<string, unknown>;
+};
+
+export type ReconScheduleUpdate = {
+  interval_minutes?: number;
+  enabled?: boolean;
+  params?: Record<string, unknown>;
+};
+
+// --- Diff ---
+export type ReconDiffEntry = { name: string; state: "new" | "removed" | "stable" };
+export type ReconDiffResult = {
+  target_id: string;
+  kind: string;
+  base_job_id: string | null;
+  head_job_id: string;
+  new_count: number;
+  removed_count: number;
+  stable_count: number;
+  entries: ReconDiffEntry[];
+};
+
+// --- Asset graph ---
+export type ReconGraphNode = {
+  id: string;
+  label: string;
+  type: "target" | "subdomain" | "ip" | "asn" | "cve" | "service";
+  severity?: string | null;
+  meta?: Record<string, unknown>;
+};
+export type ReconGraphEdge = { source: string; target: string; relation: string };
+export type ReconGraphResult = { target_id: string; nodes: ReconGraphNode[]; edges: ReconGraphEdge[] };
