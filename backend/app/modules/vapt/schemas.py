@@ -50,6 +50,17 @@ class LlmSummarizeOut(BaseModel):
     model: str
 
 
+class LlmStatusOut(BaseModel):
+    """Preflight info so the UI can show a 'ready' badge before generating."""
+
+    configured: bool
+    provider: Literal["openai", "ollama", "none"]
+    base_url: str
+    refine_model: str
+    draft_model: str | None
+    cascade_enabled: bool
+
+
 class BriefCreate(BaseModel):
     title: str = Field(..., min_length=1, max_length=300)
     body: str = Field(..., min_length=1, max_length=500_000)

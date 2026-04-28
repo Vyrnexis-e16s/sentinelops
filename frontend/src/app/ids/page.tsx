@@ -1,15 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { Radar, Sparkles } from "lucide-react";
+import { Radar, RefreshCcw, Sparkles } from "lucide-react";
 import SectionHeader from "@/components/shared/SectionHeader";
 import {
   api,
   type ApiError,
   type IdsInferenceResult,
   type IdsModelInfo,
-  type Inference
+  type Inference,
+  type Paginated,
+  type ReconJob,
+  type ReconTarget
 } from "@/lib/api";
 import { runDeferred } from "@/lib/schedule-deferred";
 
@@ -24,8 +27,8 @@ const DEFAULT_FEATURES = `{
   "srv_serror_rate": 0.91
 }`;
 
-const HTTP_LOG_TEMPLATE = `{
-  "url": "https://example.com/login",
+const HTTP_LOG_TEMPLATE_HINT = `{
+  "url": "https://<your-host>/login",
   "method": "POST",
   "status_code": 200,
   "request_bytes": 850,
@@ -33,12 +36,43 @@ const HTTP_LOG_TEMPLATE = `{
   "duration": 0.12
 }`;
 
+type ReconHttpProbe = {
+  url?: string;
+  method?: string;
+  status?: number;
+  request_bytes?: number;
+  response_bytes?: number;
+  duration_seconds?: number;
+  error?: string;
+};
+
 function formatTs(iso: string) {
   try {
     return new Date(iso).toLocaleTimeString(undefined, { hour12: false });
   } catch {
     return iso;
   }
+}
+
+function jobIsHttpProbe(j: ReconJob): boolean {
+  return j.kind === "httprobe" && j.status === "done";
+}
+
+function extractProbes(job: ReconJob): ReconHttpProbe[] {
+  const raw = (job.result_json as { probes?: ReconHttpProbe[] } | undefined)?.probes;
+  return Array.isArray(raw) ? raw : [];
+}
+
+function probeToFlowJson(probe: ReconHttpProbe): string {
+  const body = {
+    url: probe.url ?? "",
+    method: (probe.method || "GET").toUpperCase(),
+    status_code: probe.status ?? 200,
+    request_bytes: typeof probe.request_bytes === "number" ? probe.request_bytes : 250,
+    response_bytes: typeof probe.response_bytes === "number" ? probe.response_bytes : 0,
+    duration: typeof probe.duration_seconds === "number" ? probe.duration_seconds : 0
+  };
+  return JSON.stringify(body, null, 2);
 }
 
 export default function IdsPage() {
@@ -49,6 +83,11 @@ export default function IdsPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [reconJobs, setReconJobs] = useState<ReconJob[]>([]);
+  const [reconTargets, setReconTargets] = useState<ReconTarget[]>([]);
+  const [reconJobId, setReconJobId] = useState<string>("");
+  const [reconProbeIdx, setReconProbeIdx] = useState<number>(0);
+  const [reconLoading, setReconLoading] = useState(false);
 
   const loadModelAndHistory = useCallback(async () => {
     try {
@@ -69,10 +108,70 @@ export default function IdsPage() {
     }
   }, []);
 
+  const loadReconHttpProbes = useCallback(async () => {
+    setReconLoading(true);
+    try {
+      const [jobsResp, targets] = await Promise.all([
+        api.get<Paginated<ReconJob>>("/api/v1/recon/jobs?size=200&page=1"),
+        api.get<ReconTarget[]>("/api/v1/recon/targets")
+      ]);
+      const probes = jobsResp.items.filter(jobIsHttpProbe).filter((j) => extractProbes(j).length > 0);
+      setReconJobs(probes);
+      setReconTargets(targets);
+      if (probes.length > 0) {
+        setReconJobId((prev) => (prev && probes.some((j) => j.id === prev) ? prev : probes[0].id));
+      } else {
+        setReconJobId("");
+      }
+      setReconProbeIdx(0);
+    } catch (e) {
+      const a = e as ApiError;
+      if (a.status === 401) {
+        setError("Sign in so the app can read recon jobs.");
+      }
+    } finally {
+      setReconLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     const t = runDeferred(() => void loadModelAndHistory());
     return () => clearTimeout(t);
   }, [loadModelAndHistory]);
+
+  useEffect(() => {
+    const t = runDeferred(() => void loadReconHttpProbes());
+    return () => clearTimeout(t);
+  }, [loadReconHttpProbes]);
+
+  const targetByIdValue = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of reconTargets) m.set(t.id, t.value);
+    return m;
+  }, [reconTargets]);
+
+  const selectedJob = useMemo(
+    () => reconJobs.find((j) => j.id === reconJobId) ?? null,
+    [reconJobs, reconJobId]
+  );
+
+  const selectedJobProbes = useMemo(
+    () => (selectedJob ? extractProbes(selectedJob) : []),
+    [selectedJob]
+  );
+
+  const useReconProbe = useCallback(() => {
+    if (!selectedJob || selectedJobProbes.length === 0) return;
+    const probe = selectedJobProbes[Math.min(reconProbeIdx, selectedJobProbes.length - 1)];
+    if (!probe) return;
+    if (probe.error) {
+      setError(`That probe failed (${probe.error}). Pick a different one.`);
+      return;
+    }
+    setError(null);
+    setInfo(null);
+    setFeatures(probeToFlowJson(probe));
+  }, [selectedJob, selectedJobProbes, reconProbeIdx]);
 
   async function runInference() {
     setError(null);
@@ -120,7 +219,7 @@ export default function IdsPage() {
       <SectionHeader
         eyebrow="Detection · ML"
         title="Network IDS"
-        description="API-backed flow inference. Paste one JSON flow or an array of flows from NetFlow, Zeek, Suricata, proxy logs, or HTTP access logs. Raw website JS source is not network-flow telemetry."
+        description="NSL-KDD-style flow inference. Paste one JSON flow or an array of flows from NetFlow, Zeek, Suricata, proxy logs, or HTTP access logs — or pull a real probe from your recon jobs below. The model returns benign/attack with a probability and (when available) a class."
       />
 
       {error && (
@@ -146,15 +245,89 @@ export default function IdsPage() {
             disabled={busy}
             className="w-full h-56 bg-bg/60 border border-border/60 rounded-md p-3 font-mono text-xs outline-none focus:border-accent/60"
           />
+
+          <div className="mt-3 rounded-md border border-border/60 bg-bg/40 p-3">
+            <div className="text-[11px] uppercase tracking-wider text-muted mb-2 flex items-center gap-2">
+              <span>Pull from real recon HTTP probe</span>
+              <button
+                type="button"
+                onClick={() => void loadReconHttpProbes()}
+                disabled={reconLoading}
+                className="text-[10px] inline-flex items-center gap-1 text-muted hover:text-fg disabled:opacity-50"
+                aria-label="Refresh recon jobs"
+              >
+                <RefreshCcw className="h-3 w-3" />
+                {reconLoading ? "Loading…" : "Refresh"}
+              </button>
+            </div>
+            {reconJobs.length === 0 ? (
+              <p className="text-xs text-muted">
+                No completed httprobe jobs yet. Run an httprobe in the Recon tab against a real target — it will appear here automatically and you can replay it through the IDS model.
+              </p>
+            ) : (
+              <div className="flex items-center gap-2 flex-wrap">
+                <select
+                  value={reconJobId}
+                  onChange={(e) => {
+                    setReconJobId(e.target.value);
+                    setReconProbeIdx(0);
+                  }}
+                  className="text-xs bg-bg/60 border border-border/60 rounded-md px-2 py-1.5 outline-none focus:border-accent/60"
+                  disabled={busy}
+                >
+                  {reconJobs.map((j) => {
+                    const target = targetByIdValue.get(j.target_id) ?? "(unknown target)";
+                    const ts = j.finished_at ?? j.started_at ?? "";
+                    return (
+                      <option key={j.id} value={j.id}>
+                        {target} · {extractProbes(j).length} probe(s)
+                        {ts ? ` · ${formatTs(ts)}` : ""}
+                      </option>
+                    );
+                  })}
+                </select>
+                {selectedJobProbes.length > 1 && (
+                  <select
+                    value={reconProbeIdx}
+                    onChange={(e) => setReconProbeIdx(Number(e.target.value))}
+                    className="text-xs bg-bg/60 border border-border/60 rounded-md px-2 py-1.5 outline-none focus:border-accent/60"
+                    disabled={busy}
+                  >
+                    {selectedJobProbes.map((p, idx) => (
+                      <option key={idx} value={idx}>
+                        {p.error ? "× " : ""}
+                        {(p.method || "GET").toUpperCase()} {p.url ?? "(no url)"} · {p.status ?? "—"}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <button
+                  type="button"
+                  onClick={useReconProbe}
+                  disabled={busy || !selectedJob || selectedJobProbes.length === 0}
+                  className="text-xs px-3 py-1.5 rounded-md border border-accent/40 text-accent hover:bg-accent/10 disabled:opacity-50"
+                >
+                  Use this probe
+                </button>
+              </div>
+            )}
+            <details className="mt-2 text-[11px] text-muted">
+              <summary className="cursor-pointer">HTTP-log template (manual entry)</summary>
+              <pre className="mt-2 font-mono text-[11px] bg-bg/60 border border-border/40 rounded p-2 overflow-x-auto">
+{HTTP_LOG_TEMPLATE_HINT}
+              </pre>
+              <button
+                type="button"
+                onClick={() => setFeatures(HTTP_LOG_TEMPLATE_HINT)}
+                disabled={busy}
+                className="mt-2 text-[11px] px-2 py-1 rounded border border-border/60 hover:border-accent/60 disabled:opacity-50"
+              >
+                Load template into editor
+              </button>
+            </details>
+          </div>
+
           <div className="mt-3 flex items-center gap-3 flex-wrap">
-            <button
-              type="button"
-              onClick={() => setFeatures(HTTP_LOG_TEMPLATE)}
-              disabled={busy}
-              className="text-xs px-3 py-1.5 rounded-md border border-border/70 hover:border-accent/60 disabled:opacity-50"
-            >
-              Load HTTP log template
-            </button>
             <button
               type="button"
               onClick={() => void runInference()}

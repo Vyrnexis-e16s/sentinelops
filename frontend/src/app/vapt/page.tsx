@@ -19,6 +19,7 @@ import {
   type ApiError,
   type Alert,
   type Inference,
+  type LlmStatus,
   type LlmSummarizeResult,
   type MitreFoundationOut,
   type Paginated,
@@ -70,6 +71,21 @@ export default function VaptPage() {
   const [fbKey, setFbKey] = useState("");
   const [fbBusy, setFbBusy] = useState(false);
   const [busy, setBusy] = useState({ load: true, gen: false, del: null as string | null });
+  const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
+
+  const loadLlmStatus = useCallback(async () => {
+    try {
+      const s = await api.get<LlmStatus>("/api/v1/vapt/llm/status");
+      setLlmStatus(s);
+    } catch {
+      setLlmStatus(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    const t = runDeferred(() => void loadLlmStatus());
+    return () => clearTimeout(t);
+  }, [loadLlmStatus]);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -554,13 +570,33 @@ export default function VaptPage() {
             <button
               type="button"
               onClick={() => void generate()}
-              disabled={busy.gen}
+              disabled={busy.gen || (llmStatus !== null && !llmStatus.configured)}
               className="inline-flex items-center gap-2 text-sm px-4 py-2 rounded-md bg-violet-600/20 text-violet-200 border border-violet-500/50 hover:bg-violet-600/30 disabled:opacity-50"
+              title={
+                llmStatus && !llmStatus.configured
+                  ? "LLM not configured — set OPENAI_API_KEY or run scripts/setup-local-llm.sh and restart the API."
+                  : undefined
+              }
             >
               {busy.gen ? <Loader2 className="h-4 w-4 animate-spin" /> : <Brain className="h-4 w-4" />}
               Generate triage (LLM)
             </button>
-            {llmModel && <span className="text-[11px] text-muted font-mono">Model: {llmModel}</span>}
+            {llmStatus && (
+              <span
+                className={
+                  "text-[11px] inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-mono " +
+                  (llmStatus.configured
+                    ? "bg-ok/15 text-ok border border-ok/30"
+                    : "bg-danger/15 text-danger border border-danger/30")
+                }
+                title={`${llmStatus.provider} · ${llmStatus.base_url}`}
+              >
+                {llmStatus.configured
+                  ? `LLM ready · ${llmStatus.provider}${llmStatus.cascade_enabled ? " · cascade" : ""}`
+                  : "LLM not configured"}
+              </span>
+            )}
+            {llmModel && <span className="text-[11px] text-muted font-mono">Last: {llmModel}</span>}
           </div>
         </div>
 

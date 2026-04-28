@@ -241,6 +241,15 @@ export type VaptBrief = {
 
 export type LlmSummarizeResult = { summary: string; model: string };
 
+export type LlmStatus = {
+  configured: boolean;
+  provider: "openai" | "ollama" | "none";
+  base_url: string;
+  refine_model: string;
+  draft_model: string | null;
+  cascade_enabled: boolean;
+};
+
 export type MitreFoundationItem = { id: string; name: string; tactic: string };
 export type MitreFoundationOut = { items: MitreFoundationItem[] };
 

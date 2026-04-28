@@ -22,6 +22,7 @@ from app.modules.vapt.schemas import (
     CypherExportOut,
     GraphEdgeCreate,
     GraphEdgeOut,
+    LlmStatusOut,
     LlmSummarizeIn,
     LlmSummarizeOut,
     MitreFoundationOut,
@@ -92,6 +93,40 @@ async def vapt_llm_summarize(
     )
     await db.commit()
     return LlmSummarizeOut(summary=summary, model=model)
+
+
+@router.get("/llm/status", response_model=LlmStatusOut)
+async def vapt_llm_status(user: User = Depends(current_user)) -> LlmStatusOut:  # noqa: ARG001
+    """Lightweight preflight: is the LLM configured, what model, what provider.
+
+    Does NOT call the upstream — just inspects settings. Use it to render a
+    'LLM ready' badge in the UI before the user clicks Generate.
+    """
+    from app.core.config import settings
+
+    configured = llm_service.llm_is_configured()
+    raw_key = (settings.openai_api_key or "").strip()
+    if raw_key and not settings.sentinelops_llm_ollama:
+        provider: str = "openai"
+    elif settings.sentinelops_llm_ollama:
+        provider = "ollama"
+    else:
+        provider = "none"
+
+    base = (settings.sentinelops_llm_base_url or "https://api.openai.com/v1").rstrip("/")
+    refine = (settings.sentinelops_llm_model or "gpt-4o-mini").strip()
+    draft = (settings.sentinelops_llm_draft_model or "").strip() or None
+    cascade_enabled = bool(
+        settings.sentinelops_llm_cascade and draft and draft != refine
+    )
+    return LlmStatusOut(
+        configured=configured,
+        provider=provider,  # type: ignore[arg-type]
+        base_url=base,
+        refine_model=refine,
+        draft_model=draft,
+        cascade_enabled=cascade_enabled,
+    )
 
 
 @router.get("/mitre/foundation", response_model=MitreFoundationOut)
