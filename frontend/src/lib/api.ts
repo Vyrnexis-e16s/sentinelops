@@ -250,6 +250,22 @@ export type LlmStatus = {
   refine_model: string;
   draft_model: string | null;
   cascade_enabled: boolean;
+  timeout_secs: number;
+  warmup_timeout_secs: number;
+};
+
+export type LlmPingResultEntry = {
+  ok: boolean;
+  elapsed_secs: number;
+  sample?: string | null;
+  error?: string | null;
+  status_code?: number | null;
+};
+
+export type LlmPingResult = {
+  results: Record<string, LlmPingResultEntry>;
+  all_ok: boolean;
+  total_elapsed_secs: number;
 };
 
 export type MitreFoundationItem = { id: string; name: string; tactic: string };

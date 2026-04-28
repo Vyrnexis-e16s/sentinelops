@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import {
   Brain,
   ClipboardCopy,
+  Flame,
   Loader2,
   Network,
   Plus,
@@ -19,6 +20,7 @@ import {
   type ApiError,
   type Alert,
   type Inference,
+  type LlmPingResult,
   type LlmStatus,
   type LlmSummarizeResult,
   type MitreFoundationOut,
@@ -72,6 +74,8 @@ export default function VaptPage() {
   const [fbBusy, setFbBusy] = useState(false);
   const [busy, setBusy] = useState({ load: true, gen: false, del: null as string | null });
   const [llmStatus, setLlmStatus] = useState<LlmStatus | null>(null);
+  const [warmBusy, setWarmBusy] = useState(false);
+  const [warmInfo, setWarmInfo] = useState<LlmPingResult | null>(null);
 
   const loadLlmStatus = useCallback(async () => {
     try {
@@ -81,6 +85,36 @@ export default function VaptPage() {
       setLlmStatus(null);
     }
   }, []);
+
+  const warmLlm = async () => {
+    setWarmBusy(true);
+    setErr(null);
+    setWarmInfo(null);
+    try {
+      const r = await api.post<LlmPingResult>("/api/v1/vapt/llm/ping");
+      setWarmInfo(r);
+      if (!r.all_ok) {
+        const broken = Object.entries(r.results)
+          .filter(([, v]) => !v.ok)
+          .map(([k, v]) => `${k}: ${v.error || "failed"}`)
+          .join(" · ");
+        setErr(`Warm-up partial: ${broken}`);
+      }
+    } catch (e) {
+      if (isUnauthorized(e)) {
+        redirectToReauth();
+        return;
+      }
+      const a = e as ApiError;
+      if (a.status === 503) {
+        setErr(`${a.detail} Configure SENTINELOPS_LLM_OLLAMA=1 + SENTINELOPS_LLM_BASE_URL or OPENAI_API_KEY first.`);
+      } else {
+        setErr(getApiErrorMessage(e, "Warm-up failed."));
+      }
+    } finally {
+      setWarmBusy(false);
+    }
+  };
 
   useEffect(() => {
     const t = runDeferred(() => void loadLlmStatus());
@@ -239,10 +273,12 @@ export default function VaptPage() {
         setErr(
           `${a.detail} For cloud: OPENAI_API_KEY. For Ollama: run ./scripts/sentinelops-dev.sh --setup-llm (or scripts/setup-local-llm.ps1), merge .env.llm.local.generated, set SENTINELOPS_LLM_OLLAMA=1, restart the API.`
         );
-      } else if (a.status === 502) {
+      } else if (a.status === 502 || a.status === 504) {
+        const hint = llmStatus?.provider === "ollama"
+          ? " — click 'Warm LLM' once, then retry; or set SENTINELOPS_LLM_DRAFT_MODEL=qwen2.5:1.5b for a faster draft."
+          : "";
         setErr(
-          a.detail ||
-            "LLM endpoint error (check Ollama is running, base URL, and models are pulled)."
+          (a.detail || "LLM endpoint error (check Ollama is running, base URL, and models are pulled).") + hint
         );
       } else {
         setErr(getApiErrorMessage(e, "LLM call failed."));
@@ -589,15 +625,38 @@ export default function VaptPage() {
                     ? "bg-ok/15 text-ok border border-ok/30"
                     : "bg-danger/15 text-danger border border-danger/30")
                 }
-                title={`${llmStatus.provider} · ${llmStatus.base_url}`}
+                title={`${llmStatus.provider} · ${llmStatus.base_url} · timeout ${llmStatus.timeout_secs}s`}
               >
                 {llmStatus.configured
                   ? `LLM ready · ${llmStatus.provider}${llmStatus.cascade_enabled ? " · cascade" : ""}`
                   : "LLM not configured"}
               </span>
             )}
+            {llmStatus?.configured && (
+              <button
+                type="button"
+                onClick={() => void warmLlm()}
+                disabled={warmBusy}
+                className="inline-flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-md border border-amber-500/40 text-amber-200 hover:bg-amber-500/10 disabled:opacity-50"
+                title="Pre-load draft + refine models with a 1-token prompt so the next 'Generate triage' is fast."
+              >
+                {warmBusy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Flame className="h-3 w-3" />}
+                {warmBusy ? "Warming…" : "Warm LLM"}
+              </button>
+            )}
             {llmModel && <span className="text-[11px] text-muted font-mono">Last: {llmModel}</span>}
           </div>
+          {warmInfo && (
+            <div className="mt-2 text-[11px] font-mono text-muted">
+              {Object.entries(warmInfo.results).map(([m, v]) => (
+                <div key={m} className={v.ok ? "text-ok" : "text-danger"}>
+                  {v.ok ? "✓" : "✗"} {m} · {v.elapsed_secs}s
+                  {v.error ? ` — ${v.error}` : ""}
+                </div>
+              ))}
+              <div className="text-fg/60">total {warmInfo.total_elapsed_secs}s</div>
+            </div>
+          )}
         </div>
 
         <div className="glass rounded-xl p-4 border border-emerald-500/15">

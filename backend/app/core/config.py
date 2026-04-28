@@ -91,6 +91,11 @@ class Settings(BaseSettings):
     # Two-step triage: fast draft model, then SENTINELOPS_LLM_MODEL for the final brief (efficiency).
     sentinelops_llm_draft_model: str = Field("", alias="SENTINELOPS_LLM_DRAFT_MODEL")
     sentinelops_llm_cascade: bool = Field(True, alias="SENTINELOPS_LLM_CASCADE")
+    # Per-call HTTP timeout for the LLM endpoint (seconds). 7B CPU models can need 4–6 min cold,
+    # so 600 is a sensible default; raise for CPU-only Ollama with cascade.
+    sentinelops_llm_timeout_secs: int = Field(600, alias="SENTINELOPS_LLM_TIMEOUT_SECS")
+    # Short timeout used by the /llm/ping warm-up endpoint (seconds).
+    sentinelops_llm_warmup_timeout_secs: int = Field(120, alias="SENTINELOPS_LLM_WARMUP_TIMEOUT_SECS")
 
     # --- CORS ---
     cors_origins: list[str] = Field(

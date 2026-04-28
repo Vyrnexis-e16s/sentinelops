@@ -22,6 +22,8 @@ from app.modules.vapt.schemas import (
     CypherExportOut,
     GraphEdgeCreate,
     GraphEdgeOut,
+    LlmPingOut,
+    LlmPingResultEntry,
     LlmStatusOut,
     LlmSummarizeIn,
     LlmSummarizeOut,
@@ -126,7 +128,59 @@ async def vapt_llm_status(user: User = Depends(current_user)) -> LlmStatusOut:  
         refine_model=refine,
         draft_model=draft,
         cascade_enabled=cascade_enabled,
+        timeout_secs=int(settings.sentinelops_llm_timeout_secs),
+        warmup_timeout_secs=int(settings.sentinelops_llm_warmup_timeout_secs),
     )
+
+
+@router.post("/llm/ping", response_model=LlmPingOut)
+async def vapt_llm_ping(
+    user: User = Depends(current_user),
+    audit: AuditService = Depends(audit_logger),
+    db: AsyncSession = Depends(get_db),
+) -> LlmPingOut:
+    """Warm draft + refine models with a 1-token prompt to pre-load them into RAM.
+
+    Useful before clicking 'Generate triage' on CPU-only Ollama where the first call
+    to a 7B model can otherwise take 4–6 minutes (model load) on top of generation.
+    Returns per-model status; failures here pinpoint exactly which model needs to be
+    pulled or which timeout to bump.
+    """
+    import time
+
+    t0 = time.monotonic()
+    try:
+        results = await llm_service.warm_models()
+    except llm_service.LlmNotConfiguredError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    total = round(time.monotonic() - t0, 2)
+    all_ok = all(bool(v.get("ok")) for v in results.values())
+    await audit.append(
+        actor_id=user.id,
+        action="vapt.llm.ping",
+        resource_type="vapt",
+        resource_id="llm",
+        metadata={
+            "models": list(results.keys()),
+            "all_ok": all_ok,
+            "total_elapsed_secs": total,
+        },
+    )
+    await db.commit()
+    typed: dict[str, LlmPingResultEntry] = {
+        k: LlmPingResultEntry(
+            ok=bool(v.get("ok")),
+            elapsed_secs=float(v.get("elapsed_secs", 0.0)),
+            sample=str(v["sample"]) if v.get("sample") is not None else None,
+            error=str(v["error"]) if v.get("error") is not None else None,
+            status_code=int(v["status_code"]) if v.get("status_code") is not None else None,
+        )
+        for k, v in results.items()
+    }
+    return LlmPingOut(results=typed, all_ok=all_ok, total_elapsed_secs=total)
 
 
 @router.get("/mitre/foundation", response_model=MitreFoundationOut)

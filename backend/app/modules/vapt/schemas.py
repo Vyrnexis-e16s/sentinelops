@@ -59,6 +59,24 @@ class LlmStatusOut(BaseModel):
     refine_model: str
     draft_model: str | None
     cascade_enabled: bool
+    timeout_secs: int
+    warmup_timeout_secs: int
+
+
+class LlmPingResultEntry(BaseModel):
+    ok: bool
+    elapsed_secs: float
+    sample: str | None = None
+    error: str | None = None
+    status_code: int | None = None
+
+
+class LlmPingOut(BaseModel):
+    """Per-model warm-up result for the /llm/ping endpoint."""
+
+    results: dict[str, LlmPingResultEntry]
+    all_ok: bool
+    total_elapsed_secs: float
 
 
 class BriefCreate(BaseModel):

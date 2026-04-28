@@ -92,8 +92,12 @@ async def _chat(
     except httpx.TimeoutException as exc:
         log.warning("vapt.llm.timeout", base=base, model=model, error=str(exc))
         raise LlmUpstreamError(
-            f"LLM endpoint at {base} timed out for model {model!r}. "
-            f"Local CPU runs of larger models can take minutes; try a smaller draft model or increase the client timeout.",
+            f"LLM endpoint at {base} timed out for model {model!r} after "
+            f"{settings.sentinelops_llm_timeout_secs}s. On CPU-only Ollama, a 7B model often needs "
+            f"4–6 minutes for the first response (cold load). Try one of: "
+            f"(1) click 'Warm LLM' first; (2) use a smaller draft model "
+            f"(e.g. SENTINELOPS_LLM_DRAFT_MODEL=qwen2.5:1.5b or phi3.5); "
+            f"(3) raise SENTINELOPS_LLM_TIMEOUT_SECS; (4) disable cascade for this run.",
             status_code=504,
         ) from exc
     except httpx.RequestError as exc:
@@ -103,19 +107,36 @@ async def _chat(
             status_code=502,
         ) from exc
     if r.status_code >= 400:
-        log.warning("vapt.llm.error", model=model, status=r.status_code, body=r.text[:500])
+        body_excerpt = r.text[:500]
+        log.warning("vapt.llm.error", model=model, status=r.status_code, body=body_excerpt)
+        # Ollama returns 404 with "model 'X' not found" if the model isn't pulled — bubble that up.
+        hint = ""
+        if r.status_code == 404 and ("not found" in body_excerpt.lower() or "no such model" in body_excerpt.lower()):
+            hint = f" Pull it first on the host: 'ollama pull {model}'."
         raise LlmUpstreamError(
-            f"LLM provider returned {r.status_code} for model {model!r}. Check key, name, and base URL.",
+            f"LLM provider returned {r.status_code} for model {model!r}.{hint} "
+            f"Check key, name, and base URL.",
             status_code=r.status_code,
         )
-    data = r.json()
+    try:
+        data = r.json()
+    except ValueError as exc:
+        log.warning("vapt.llm.parse_json", model=model, error=str(exc), body=r.text[:200])
+        raise LlmUpstreamError(
+            f"LLM provider returned non-JSON response for model {model!r}.",
+            status_code=502,
+        ) from exc
     try:
         text = (data["choices"][0]["message"].get("content") or "").strip()
     except (KeyError, IndexError, TypeError) as exc:
         log.warning("vapt.llm.parse", model=model, error=str(exc))
-        raise LlmUpstreamError("Unexpected LLM response shape", status_code=r.status_code) from exc
+        raise LlmUpstreamError("Unexpected LLM response shape", status_code=502) from exc
     if not text:
-        raise LlmUpstreamError(f"Empty response from model {model!r}", status_code=200)
+        raise LlmUpstreamError(
+            f"Empty response from model {model!r} (the model returned 200 with no content; "
+            f"this often means the model is still loading — try 'Warm LLM' once and retry).",
+            status_code=502,
+        )
     return text
 
 
@@ -152,7 +173,13 @@ async def summarize_triage(
             f"Curated MITRE ATT&CK technique reference (subset; align mentions when useful):\n{addendum}"
         )
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(180.0)) as client:
+    timeout = httpx.Timeout(
+        connect=10.0,
+        read=float(settings.sentinelops_llm_timeout_secs),
+        write=30.0,
+        pool=10.0,
+    )
+    async with httpx.AsyncClient(timeout=timeout) as client:
         if not want_cascade:
             user_msg = (
                 f"Data and findings from our security platform (JSON and text below):\n\n{context[:190_000]}"
@@ -194,3 +221,63 @@ async def summarize_triage(
         )
         label = f"cascade:{draft}→{refine}"
         return final, label
+
+
+async def warm_models() -> dict[str, dict[str, object]]:
+    """Pre-load draft + refine models with a 1-token prompt; returns timing per model.
+
+    Surfaces a tiny error per model rather than aborting the whole call when one
+    model isn't pulled — that lets the UI tell the user exactly what to fix.
+    """
+    if not llm_is_configured():
+        raise LlmNotConfiguredError("No LLM configured.")
+    api_key = _effective_api_key()
+    base = (settings.sentinelops_llm_base_url or "https://api.openai.com/v1").rstrip("/")
+    refine = _refine_model_name()
+    draft = _draft_model_name()
+    models: list[str] = [m for m in [draft, refine] if m]
+    if not models:
+        models = [refine]
+    seen: set[str] = set()
+    unique: list[str] = []
+    for m in models:
+        if m and m not in seen:
+            seen.add(m)
+            unique.append(m)
+
+    import time
+
+    timeout = httpx.Timeout(
+        connect=10.0,
+        read=float(settings.sentinelops_llm_warmup_timeout_secs),
+        write=15.0,
+        pool=5.0,
+    )
+    out: dict[str, dict[str, object]] = {}
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for model in unique:
+            t0 = time.monotonic()
+            try:
+                text = await _chat(
+                    client,
+                    model=model,
+                    system="Reply with exactly: ok",
+                    user="warm",
+                    api_key=api_key,
+                    base=base,
+                    max_tokens=4,
+                    temperature=0.0,
+                )
+                out[model] = {
+                    "ok": True,
+                    "elapsed_secs": round(time.monotonic() - t0, 2),
+                    "sample": text[:32],
+                }
+            except LlmUpstreamError as exc:
+                out[model] = {
+                    "ok": False,
+                    "elapsed_secs": round(time.monotonic() - t0, 2),
+                    "error": str(exc),
+                    "status_code": exc.status_code,
+                }
+    return out
