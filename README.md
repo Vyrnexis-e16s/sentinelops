@@ -132,9 +132,9 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload
 
-# Frontend
+# Frontend (pnpm only — package-lock.json is .gitignored)
 cd frontend
-corepack enable && pnpm install   # or: npm install
+corepack enable && pnpm install
 pnpm dev
 
 # ML (retrain)
@@ -193,14 +193,13 @@ The frontend is managed with **pnpm** (see `packageManager` in `frontend/package
 ```bash
 cd frontend
 # clean tree (if upgrading or ERESOLVE persisted):
-# rm -rf node_modules
-# (optional) del package-lock.json  # or remove pnpm-lock.yaml when switching managers
+# rm -rf node_modules pnpm-lock.yaml   # only when upgrading the dep set on purpose
 corepack enable
 pnpm install
 pnpm audit
 ```
 
-Avoid `npm audit fix --force` on this app; it can suggest wild downgrades. Prefer editing `package.json` (including the `overrides` block) and running `pnpm install`, then `pnpm typecheck`, `pnpm lint`, and `pnpm build`.
+Avoid `npm` / `yarn` here — `package-lock.json` and `yarn.lock` are `.gitignore`d so a stray `npm install` cannot create a competing dep tree. Prefer editing `package.json` (including the `overrides` block) and running `pnpm install`, then `pnpm typecheck`, `pnpm lint`, and `pnpm build`.
 
 Optional (Python backend, same machine):
 

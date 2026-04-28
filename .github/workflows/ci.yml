@@ -68,7 +68,7 @@ jobs:
           cache-dependency-path: frontend/pnpm-lock.yaml
       - name: Install
         working-directory: frontend
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --frozen-lockfile
       - name: Lint
         working-directory: frontend
         run: pnpm lint

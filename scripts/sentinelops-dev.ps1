@@ -552,17 +552,23 @@ Log "Node: $(node -v)"
 # --- frontend install + checks ---
 $fe = Join-Path $RepoRoot "frontend"
 Set-Location $fe
-if (HasCmd "pnpm") {
-  pnpm install 2>&1 | Tee-Object -FilePath $LogFile -Append
-  pnpm run typecheck 2>&1 | Tee-Object -FilePath $LogFile -Append
-  if ($LASTEXITCODE -ne 0) { Log "Frontend typecheck failed" "ERROR"; exit 1 }
-  pnpm run lint 2>&1 | Tee-Object -FilePath $LogFile -Append
-} else {
-  npm install 2>&1 | Tee-Object -FilePath $LogFile -Append
-  npm run typecheck 2>&1 | Tee-Object -FilePath $LogFile -Append
-  if ($LASTEXITCODE -ne 0) { Log "Frontend typecheck failed" "ERROR"; exit 1 }
-  npm run lint 2>&1 | Tee-Object -FilePath $LogFile -Append
+# This project pins packageManager=pnpm@9.12.1 in package.json and only commits
+# pnpm-lock.yaml. Falling back to `npm install` would create a competing dep
+# tree, so bootstrap pnpm via corepack (ships with Node 20+) instead.
+if (-not (HasCmd "pnpm")) {
+  if (HasCmd "corepack") {
+    Log "pnpm not found; activating via corepack (pinned in package.json)"
+    corepack enable 2>&1 | Tee-Object -FilePath $LogFile -Append
+    corepack prepare pnpm@9.12.1 --activate 2>&1 | Tee-Object -FilePath $LogFile -Append
+  } else {
+    Log "pnpm and corepack both missing. Install Node 20+ or run: npm i -g pnpm@9.12.1" "ERROR"
+    exit 1
+  }
 }
+pnpm install 2>&1 | Tee-Object -FilePath $LogFile -Append
+pnpm run typecheck 2>&1 | Tee-Object -FilePath $LogFile -Append
+if ($LASTEXITCODE -ne 0) { Log "Frontend typecheck failed" "ERROR"; exit 1 }
+pnpm run lint 2>&1 | Tee-Object -FilePath $LogFile -Append
 Set-Location $RepoRoot
 
 # --- Full stack: Docker Compose is required (DB, Redis, API, UI, worker) ---

@@ -1,8 +1,11 @@
 FROM node:22-alpine AS deps
 WORKDIR /app
 RUN corepack enable && corepack prepare pnpm@9.12.1 --activate
-COPY package.json pnpm-lock.yaml* ./
-RUN pnpm install --frozen-lockfile=false
+# pnpm-lock.yaml is the source of truth (see frontend/.npmrc). Use a frozen
+# lockfile so CI/Docker builds are reproducible and fail fast if package.json
+# drifts from the lock.
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
 
 # Local `docker compose` uses this target for `pnpm dev` (not the production `runner` image).
 FROM node:22-alpine AS dev
