@@ -5,7 +5,13 @@ import typescript from "eslint-config-next/typescript";
 const eslintConfig = [
   ...coreWebVitals,
   ...typescript,
-  { ignores: [".next/**", "out/**", "node_modules/**", "build/**"] }
+  {
+    rules: {
+      // Project uses Next/Image where it matters; allow plain <img> in marketing/auth pages.
+      "@next/next/no-img-element": "off",
+    },
+  },
+  { ignores: [".next/**", "out/**", "node_modules/**", "build/**"] },
 ];
 
 export default eslintConfig;

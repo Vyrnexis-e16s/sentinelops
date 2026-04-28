@@ -28,6 +28,12 @@ yarn-error.log*
 pnpm-lock.yaml.backup
 *.tsbuildinfo
 
+# This project uses pnpm (see "packageManager" in frontend/package.json).
+# Ignore npm/yarn lockfiles so a casual `npm install` cannot re-introduce
+# a competing dep tree alongside pnpm-lock.yaml.
+package-lock.json
+yarn.lock
+
 # Env / secrets
 .env
 .env.local
