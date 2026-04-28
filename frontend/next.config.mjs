@@ -1,5 +1,13 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Next 15+ blocks some dev /_next/* and WS requests unless the origin matches; Docker + 127.0.0.1
+  // in the browser is not the same as "localhost" — list both. See:
+  // https://nextjs.org/docs/app/api-reference/config/next-config-js/allowedDevOrigins
+  allowedDevOrigins: [
+    "127.0.0.1",
+    "localhost",
+    "*.localhost",
+  ],
   reactStrictMode: true,
   poweredByHeader: false,
   experimental: {

@@ -78,7 +78,30 @@ async def _chat(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    r = await client.post(url, json=body, headers=headers)
+    try:
+        r = await client.post(url, json=body, headers=headers)
+    except httpx.ConnectError as exc:
+        log.warning("vapt.llm.connect_error", base=base, model=model, error=str(exc))
+        raise LlmUpstreamError(
+            f"Cannot reach LLM endpoint at {base} (connection refused / unreachable). "
+            f"If using Ollama on the host with a Docker backend, bind Ollama to 0.0.0.0:11434 "
+            f"(systemd: Environment=\"OLLAMA_HOST=0.0.0.0:11434\") and ensure SENTINELOPS_LLM_BASE_URL "
+            f"is host.docker.internal or your host LAN IP.",
+            status_code=502,
+        ) from exc
+    except httpx.TimeoutException as exc:
+        log.warning("vapt.llm.timeout", base=base, model=model, error=str(exc))
+        raise LlmUpstreamError(
+            f"LLM endpoint at {base} timed out for model {model!r}. "
+            f"Local CPU runs of larger models can take minutes; try a smaller draft model or increase the client timeout.",
+            status_code=504,
+        ) from exc
+    except httpx.RequestError as exc:
+        log.warning("vapt.llm.request_error", base=base, model=model, error=str(exc))
+        raise LlmUpstreamError(
+            f"Network error talking to LLM endpoint at {base}: {exc}.",
+            status_code=502,
+        ) from exc
     if r.status_code >= 400:
         log.warning("vapt.llm.error", model=model, status=r.status_code, body=r.text[:500])
         raise LlmUpstreamError(

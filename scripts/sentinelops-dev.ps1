@@ -240,6 +240,7 @@ function Test-SentinelopsComposeAllRunning {
 }
 
 function Start-SentinelopsCompose {
+  Invoke-MaybeRebindHostOllama
   if ($script:ForceBuild) {
     Log "docker compose up -d --build --force-recreate (-All: forced fresh start)"
     return (Invoke-DockerCompose @("up", "-d", "--build", "--force-recreate"))
@@ -258,6 +259,48 @@ function Invoke-SentinelopsSeed {
   if ($code -ne 0) {
     Log "seed exited $code (often OK on re-run when data already exists)" "WARN"
   }
+}
+
+# When .env opts into local Ollama AND points at host.docker.internal (or any
+# non-localhost host), Ollama needs to listen on 0.0.0.0:<port>. Default
+# installs bind to 127.0.0.1, which the container cannot reach. Idempotent.
+function Invoke-MaybeRebindHostOllama {
+  if ($env:SENTINELOPS_LLM_AUTOBIND -eq "0") { return }
+  $envFile = Join-Path $RepoRoot ".env"
+  if (-not (Test-Path -LiteralPath $envFile)) { return }
+  $envText = Get-Content -LiteralPath $envFile -Raw
+  if ($envText -notmatch '(?m)^\s*SENTINELOPS_LLM_OLLAMA\s*=\s*1\b') { return }
+  $base = $null
+  foreach ($line in (Get-Content -LiteralPath $envFile)) {
+    if ($line -match '^\s*SENTINELOPS_LLM_BASE_URL\s*=\s*(.+?)\s*$') {
+      $base = $Matches[1].Trim('"').Trim("'")
+    }
+  }
+  if (-not $base) { return }
+  if ($base -match '127\.0\.0\.1' -or $base -match 'localhost') { return }   # local-only
+  $needRebind = $false
+  try {
+    $listeners = Get-NetTCPConnection -State Listen -LocalPort 11434 -ErrorAction Stop
+    if ($listeners) {
+      $hasAny = $false; $hasLoop = $false
+      foreach ($c in $listeners) {
+        if ($c.LocalAddress -in @("0.0.0.0", "::", "*")) { $hasAny = $true }
+        elseif ($c.LocalAddress -in @("127.0.0.1", "::1")) { $hasLoop = $true }
+      }
+      if ($hasLoop -and -not $hasAny) { $needRebind = $true }
+    }
+  } catch { }   # nothing listening — let the bind script (or Ollama itself) start it
+  if (-not $needRebind) { return }
+  $bindPs1 = Join-Path $ScriptDir "bind-ollama-host.ps1"
+  if (-not (Test-Path -LiteralPath $bindPs1)) {
+    Log "WARN: $bindPs1 missing; cannot auto-rebind Ollama. VAPT 'Generate triage' may return 502 until Ollama listens on 0.0.0.0." "WARN"
+    return
+  }
+  Log "Ollama is bound to 127.0.0.1:11434 but .env points the backend container at $base — running bind-ollama-host.ps1 (set `$env:SENTINELOPS_LLM_AUTOBIND=0 to skip)."
+  $oldEa = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  & $bindPs1 2>&1 | Tee-Object -FilePath $LogFile -Append
+  $ErrorActionPreference = $oldEa
 }
 
 # -All implies force-rebuild + seed at the end of the full pipeline.
@@ -310,6 +353,7 @@ if ($Stop -or $Restart -or $Status -or $Logs -or $Migrate -or $Smoke -or $SetupL
     exit 0
   }
   if ($Restart) {
+    Invoke-MaybeRebindHostOllama
     Log "Restarting SentinelOps stack: docker compose up -d --build --force-recreate"
     Log "  (rebuilds images that changed; recreates every container so volume-mounted source is reread)"
     $code = (Invoke-DockerCompose @("up", "-d", "--build", "--force-recreate"))

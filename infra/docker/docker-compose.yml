@@ -105,15 +105,35 @@ services:
     build:
       context: ../../frontend
       dockerfile: Dockerfile
+      # Default image is `runner` (NODE_ENV=production). Running `pnpm dev` on that
+      # leaves NODE_ENV=production and breaks Next dev (ERR_CONNECTION_RESET / odd TCP).
+      target: dev
     restart: unless-stopped
     env_file: ../../.env
     # Inside the Docker network the Next.js server proxies /api/v1/* via this
     # internal target; the browser still uses NEXT_PUBLIC_API_URL/_WS_URL from
     # `.env` to reach the backend through the host's published ports.
     environment:
+      NODE_ENV: development
+      NEXT_TELEMETRY_DISABLED: "1"
+      # Windows / macOS bind mounts: stable file watching for dev server
+      WATCHPACK_POLLING: "true"
+      CHOKIDAR_USEPOLLING: "true"
       INTERNAL_API_URL: http://backend:8000
     depends_on:
       - backend
+    # Next first compile can take 30–60s; without this, "connection reset" is often the browser
+    # hitting the port while the dev server is still starting.
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"require('http').get('http://127.0.0.1:3000/',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))\"",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 18
+      start_period: 90s
     volumes:
       - ../../frontend:/app
       - /app/node_modules

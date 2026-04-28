@@ -77,6 +77,35 @@ The **VAPT** view can call a **local** model through an OpenAI-compatible API ([
 
 **After Ollama is installed and the `ollama` command works:** from the repo root run `./scripts/sentinelops-dev.sh --setup-llm` (Linux/macOS) or `.\scripts\setup-local-llm.ps1` (Windows), merge the generated `.env.llm.local.generated` into your `.env`, and restart the API. **Full** variable list, two-model **draft + refine** cascade, Docker-Compose host access, and troubleshooting: [`docs/LOCAL_LLM.md`](docs/LOCAL_LLM.md) (also linked from [`.env.example`](.env.example) and [`scripts/README.md`](scripts/README.md)).
 
+#### Docker reaching host Ollama (auto-binding)
+
+By default, Ollama listens on `127.0.0.1:11434`. The SentinelOps backend runs in Docker, and a container **cannot** reach a host loopback even with `extra_hosts: host-gateway`, so VAPT *Generate triage* would return **HTTP 502** until Ollama listens on `0.0.0.0:11434`.
+
+The runner scripts now handle this automatically:
+
+- **Linux / WSL:** [`scripts/bind-ollama-host.sh`](scripts/bind-ollama-host.sh) writes `/etc/systemd/system/ollama.service.d/override.conf` with `OLLAMA_HOST=0.0.0.0:11434` and restarts the service. Idempotent.
+- **Windows:** [`scripts/bind-ollama-host.ps1`](scripts/bind-ollama-host.ps1) sets the **User**-scope `OLLAMA_HOST` env var and restarts the Ollama tray app. If a WSL distro contains an `ollama.service` it will run the `.sh` helper inside that distro instead.
+
+These are wired in automatically:
+
+- `./scripts/sentinelops-dev.sh` and its `--restart` / `--all` paths call the bash helper before `docker compose up` whenever `.env` has `SENTINELOPS_LLM_OLLAMA=1` and `SENTINELOPS_LLM_BASE_URL` points at a non-localhost host (`host.docker.internal`, an IP, etc.) and Ollama is currently bound to `127.0.0.1` only.
+- `.\scripts\sentinelops-dev.ps1` (and `-Restart` / `-All`) does the same on Windows.
+- `scripts/setup-local-llm.sh` and `scripts/setup-local-llm.ps1` also call the binder when a `docker-compose.yml` is detected in the repo.
+
+Override with `SENTINELOPS_LLM_AUTOBIND=0` (env var) to skip the auto-rebind. Run the helper manually any time:
+
+```bash
+# Linux / WSL
+bash scripts/bind-ollama-host.sh
+
+# Windows (PowerShell)
+.\scripts\bind-ollama-host.ps1
+```
+
+#### Better LLM error messages
+
+The backend's LLM client (`backend/app/modules/vapt/services/llm.py`) now catches `httpx.ConnectError` / `httpx.TimeoutException` / `httpx.RequestError` and returns explicit **HTTP 502** (upstream unreachable) or **HTTP 504** (upstream timeout) with the upstream URL and reason in the response body — instead of the generic *"Server error — check API logs, database, and run `alembic upgrade head` if tables are missing"* you got from a bare 500.
+
 ## Portfolio proof (screenshots)
 
 Screenshots are stored as PNGs in [`docs/images/`](docs/images/). For best results, capture **after** `make up` and `make seed`, while signed in (or with a dev JWT) so the API-backed panels are populated. Optional extras you can add the same way: `05-vault.png` (`/vault`), `06-api-docs.png` (`http://localhost:8000/docs`), `07-metrics.png` (`/metrics` with `EXPOSE_PROMETHEUS=true`), `08-command-palette.png` (⌘K / Ctrl+K on any page), `09-themes.png` (Tactical vs Quantum Aurora).

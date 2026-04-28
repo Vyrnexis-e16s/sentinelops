@@ -98,3 +98,33 @@ On **Linux**, unsupervised `sudo` is not run unless **`SENTINELOPS_APT_INSTALL=1
 ## Local LLM (Ollama / VAPT)
 
 Full install, environment variables, Docker host access, and troubleshooting: **[`docs/LOCAL_LLM.md`](../docs/LOCAL_LLM.md)**. Short path: `bash scripts/setup-local-llm.sh` or `.\scripts\setup-local-llm.ps1`, merge `.env.llm.local.generated` into `.env`, restart the API, then use the VAPT page.
+
+### Auto-binding host Ollama for Docker (`bind-ollama-host.sh` / `.ps1`)
+
+Default Ollama installs listen on `127.0.0.1:11434`. Containers cannot reach a host loopback even with `extra_hosts: host-gateway`, so VAPT *Generate triage* would 502 until Ollama listens on `0.0.0.0:11434`.
+
+| Platform | Helper | What it does |
+|---|---|---|
+| Linux / WSL2 | [`bind-ollama-host.sh`](bind-ollama-host.sh) | Drops `/etc/systemd/system/ollama.service.d/override.conf` with `OLLAMA_HOST=0.0.0.0:11434` and restarts `ollama.service`. Idempotent. |
+| Windows | [`bind-ollama-host.ps1`](bind-ollama-host.ps1) | Sets the **User**-scope `OLLAMA_HOST` env var, stops/relaunches the Ollama tray app. If a WSL distro contains `ollama.service`, runs the `.sh` helper inside that distro instead. |
+
+Both runners (`sentinelops-dev.sh`, `sentinelops-dev.ps1`) call the appropriate helper automatically before `docker compose up` (covering default run, `--all`/`-All`, and `--restart`/`-Restart`) when:
+
+- `.env` has `SENTINELOPS_LLM_OLLAMA=1`, **and**
+- `SENTINELOPS_LLM_BASE_URL` is non-localhost (e.g. `host.docker.internal`), **and**
+- the host's Ollama is currently bound to `127.0.0.1` only.
+
+`scripts/setup-local-llm.sh` and `scripts/setup-local-llm.ps1` do the same when `infra/docker/docker-compose.yml` is present.
+
+Set `SENTINELOPS_LLM_AUTOBIND=0` (env var) to skip the auto-rebind. You can also run the helper manually any time:
+
+```bash
+bash scripts/bind-ollama-host.sh                       # Linux / WSL
+OLLAMA_PORT=11500 bash scripts/bind-ollama-host.sh     # custom port
+```
+
+```powershell
+.\scripts\bind-ollama-host.ps1                          # Windows / WSL hybrid
+.\scripts\bind-ollama-host.ps1 -Port 11500
+.\scripts\bind-ollama-host.ps1 -SkipWsl                 # never delegate into WSL
+```

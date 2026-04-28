@@ -68,6 +68,10 @@ Modes (default = setup; MODE env var):
 
 Environment knobs:
   SENTINELOPS_APT_INSTALL=1   apt-get (sudo) Python 3.12+ when missing on Debian/Kali/Ubuntu.
+  SENTINELOPS_AUTO_INSTALL=1  apt bootstrap (Python/Node/Docker) before venvs on apt distros (--auto sets this).
+  SENTINELOPS_LLM_AUTOBIND=0  skip the auto-rebind of host Ollama to 0.0.0.0:11434 before docker compose up.
+                              (When .env has SENTINELOPS_LLM_OLLAMA=1 + a non-localhost SENTINELOPS_LLM_BASE_URL,
+                               the runner calls scripts/bind-ollama-host.sh so the backend container can reach it.)
 
 Examples:
   ./scripts/sentinelops-dev.sh                 # full setup (skip rebuild if already running)
@@ -155,7 +159,32 @@ compose_all_running() {
   )
 }
 
+maybe_rebind_host_ollama() {
+  # When .env opts into local Ollama AND points at host.docker.internal (or any
+  # non-localhost host), the backend container needs Ollama listening on
+  # 0.0.0.0:<port>. Default Ollama installs bind to 127.0.0.1, which the
+  # container cannot reach. Idempotent — re-running is safe.
+  [[ "${SENTINELOPS_LLM_AUTOBIND:-1}" == "1" ]] || return 0
+  local env_file="${REPO_ROOT}/.env"
+  [[ -f "$env_file" ]] || return 0
+  grep -qE '^[[:space:]]*SENTINELOPS_LLM_OLLAMA=1' "$env_file" || return 0
+  local base
+  base="$(grep -E '^[[:space:]]*SENTINELOPS_LLM_BASE_URL=' "$env_file" | tail -n1 | sed -E 's/^[[:space:]]*SENTINELOPS_LLM_BASE_URL=//' | tr -d '"')"
+  [[ -n "$base" ]] || return 0
+  case "$base" in
+    *127.0.0.1*|*localhost*) return 0 ;;  # local-only base, nothing to rebind
+  esac
+  command -v ss >/dev/null 2>&1 || return 0
+  if ! ss -ltn 2>/dev/null | awk '{print $4}' | grep -qE '^127\.0\.0\.1:11434$'; then
+    return 0
+  fi
+  log "Ollama is bound to 127.0.0.1:11434 but .env points the backend container at $base — running scripts/bind-ollama-host.sh (set SENTINELOPS_LLM_AUTOBIND=0 to skip)."
+  bash "${REPO_ROOT}/scripts/bind-ollama-host.sh" 2>&1 | tee -a "$LOG_FILE" || \
+    log "bind-ollama-host.sh exited non-zero — VAPT 'Generate triage' may return 502 until Ollama listens on 0.0.0.0." "WARN"
+}
+
 run_compose_or_skip() {
+  maybe_rebind_host_ollama
   if [[ "${FORCE_BUILD:-0}" -eq 1 ]]; then
     log "docker compose up -d --build --force-recreate (--all: forced fresh start)"
     docker_compose up -d --build --force-recreate
@@ -219,6 +248,7 @@ fi
 
 if [[ "$ACTION" == "restart" ]]; then
   require_docker || exit 1
+  maybe_rebind_host_ollama
   log "Restarting SentinelOps stack: docker compose up -d --build --force-recreate"
   log "  (rebuilds images that changed; recreates every container so volume-mounted source is reread)"
   docker_compose up -d --build --force-recreate 2>&1 | tee -a "$LOG_FILE"
